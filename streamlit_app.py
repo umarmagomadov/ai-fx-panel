@@ -1,4 +1,4 @@
-— УМНЫЙ БОТ (РЕАЛЬНЫЕ + ДЕМО СИГНАЛЫ) ---
+(РЕАЛЬНЫЕ + ДЕМО СИГНАЛЫ) ---
 import requests
 import pandas as pd
 import numpy as np

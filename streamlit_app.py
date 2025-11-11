@@ -7,7 +7,25 @@ import random
 import time
 import plotly.graph_objects as go
 from datetime import datetime
+# --- TELEGRAM НАСТРОЙКИ ---
+TELEGRAM_TOKEN = "8188894081:AAHr7im0L7CVbT2aUoQmH3mPqD2bXXXXXXX"  # вставь свой токен сюда
+CHAT_ID = "6045310859"  # твой Telegram ID
 
+def send_telegram_message(pair, signal, confidence, expiry, mode):
+    text = (
+        f"🤖 *AI FX СИГНАЛ ({mode})*\n"
+        f"💱 Пара: {pair}\n"
+        f"📊 Сигнал: {signal}\n"
+        f"📈 Уверенность: {confidence}\n"
+        f"⏱ Экспирация: {expiry}\n"
+        f"⚙️ Обновлено автоматически."
+    )
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print("Ошибка при отправке в Telegram:", e)
 # НАСТРОЙКИ
 REFRESH_SEC = 1
 LOOKBACK_MIN = 120

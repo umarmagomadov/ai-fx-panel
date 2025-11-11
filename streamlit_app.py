@@ -152,7 +152,7 @@ send_telegram_message(
     best["Экспирация"],
     "РЕАЛ" if market_open else "ДЕМО"
 )
-
+print("📨 Сигнал отправлен в Telegram:", best["Пара"], best["Сигнал"])
 # Пауза перед обновлением
 time.sleep(REFRESH_SEC)
 st.rerun()

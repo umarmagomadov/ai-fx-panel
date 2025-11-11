@@ -200,7 +200,8 @@ if best is not None:
     else:
         expiry = "1–2 минуты (осторожно, слабый сигнал)"
     st.write(f"⏱ Рекомендуемое время экспирации: **{expiry}**")
-# ---------- Уведомление ----------
+## --- Отправляем сигнал в Telegram ---
+    send_telegram_message(best["Pair"], best["Signal"], round(confidence, 1), expiry) ---------- Уведомление ----------
 if "last_signal" not in st.session_state:
     st.session_state["last_signal"] = ""
 

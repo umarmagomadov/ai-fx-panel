@@ -7,7 +7,7 @@ import random
 import plotly.graph_objects as go
 
 # ---------- НАСТРОЙКИ ----------
-REFRESH_SEC = 1  # Обновление каждую секунду
+REFRESH_SEC = 1  # обновление каждую секунду
 LOOKBACK_MIN = 180
 INTERVAL = "1m"
 MIN_BARS = 50
@@ -52,6 +52,14 @@ def bollinger(series, period=20, dev=2):
     lower = sma - dev * std
     return upper, lower
 
+def atr(df, period=14):
+    high_low = df["High"] - df["Low"]
+    high_close = np.abs(df["High"] - df["Close"].shift())
+    low_close = np.abs(df["Low"] - df["Close"].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.rolling(period).mean()
+
 # ---------- СИГНАЛ ----------
 def make_signal(df):
     close = df["Close"]
@@ -60,6 +68,7 @@ def make_signal(df):
     macd_line, signal_line = macd(close)
     rsi_val = rsi(close)
     upper, lower = bollinger(close)
+    atr_val = atr(df)
 
     last = close.iloc[-1]
     r = rsi_val.iloc[-1]
@@ -67,10 +76,11 @@ def make_signal(df):
     macd_prev = macd_line.iloc[-2]
     sig_now = signal_line.iloc[-1]
     sig_prev = signal_line.iloc[-2]
+    atr_now = atr_val.iloc[-1]
 
-    if ema_fast.iloc[-1] > ema_slow.iloc[-1] and r > 55 and macd_now > sig_now and macd_prev < sig_prev and last < upper.iloc[-1]:
+    if ema_fast.iloc[-1] > ema_slow.iloc[-1] and r > 55 and macd_now > sig_now and macd_prev < sig_prev:
         signal = "BUY"
-    elif ema_fast.iloc[-1] < ema_slow.iloc[-1] and r < 45 and macd_now < sig_now and macd_prev > sig_prev and last > lower.iloc[-1]:
+    elif ema_fast.iloc[-1] < ema_slow.iloc[-1] and r < 45 and macd_now < sig_now and macd_prev > sig_prev:
         signal = "SELL"
     else:
         signal = "WAIT"
@@ -82,7 +92,25 @@ def make_signal(df):
         conf += (abs(ema_fast.iloc[-1] - ema_slow.iloc[-1]) / last) * 10000
     conf = float(np.clip(conf, 0, 100))
 
-    return {"signal": signal, "confidence": round(conf, 1), "price": float(last), "rsi": round(r, 1), "ema_fast": ema_fast, "ema_slow": ema_slow, "upper": upper, "lower": lower}
+    # классификация волатильности по ATR
+    volatility = "спокойный 😌"
+    if atr_now > df["Close"].mean() * 0.005:
+        volatility = "средний ⚖️"
+    if atr_now > df["Close"].mean() * 0.01:
+        volatility = "высокий ⚡"
+
+    return {
+        "signal": signal,
+        "confidence": round(conf, 1),
+        "price": float(last),
+        "rsi": round(r, 1),
+        "ema_fast": ema_fast,
+        "ema_slow": ema_slow,
+        "upper": upper,
+        "lower": lower,
+        "atr": atr_now,
+        "volatility": volatility,
+    }
 
 # ---------- ЗАГРУЗКА ----------
 @st.cache_data(ttl=1)
@@ -103,7 +131,7 @@ def load_pair(ticker):
     return data
 
 # ---------- UI ----------
-st.set_page_config(page_title="AI FX Ultra Panel (Dark+Chart)", layout="wide")
+st.set_page_config(page_title="AI FX Ultra Panel (Dark+ATR)", layout="wide")
 st.markdown("""
     <style>
     body { background-color: #0e1117; color: #fafafa; }
@@ -112,19 +140,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='color:#00ffcc'>🌙 AI FX Ultra Panel PRO++ (Dark + Chart)</h1>", unsafe_allow_html=True)
-st.caption("RSI + MACD + EMA + Bollinger · обновление 1 секунда · ночной режим + график свечей")
+st.markdown("<h1 style='color:#00ffcc'>🌙 AI FX Ultra Panel PRO+++ (ATR + Chart)</h1>", unsafe_allow_html=True)
+st.caption("RSI + MACD + EMA + Bollinger + ATR · автообновление 1 секунда · ночной режим + график свечей")
 
-# автообновление
 st.markdown(f"<script>setTimeout(()=>window.location.reload(), {REFRESH_SEC*1000});</script>", unsafe_allow_html=True)
 
-# ---------- Анализ всех валют ----------
+# ---------- Анализ ----------
 rows = []
 signals_data = {}
 for name, ticker in PAIRS.items():
     df = load_pair(ticker)
     sig = make_signal(df)
-    # тестовые сигналы
     if random.random() < 0.05:
         sig["signal"] = random.choice(["BUY", "SELL"])
         sig["confidence"] = random.uniform(60, 99)
@@ -134,6 +160,7 @@ for name, ticker in PAIRS.items():
         "Confidence": sig["confidence"],
         "Price": sig["price"],
         "RSI": sig["rsi"],
+        "Volatility": sig["volatility"],
     })
     signals_data[name] = (df, sig)
 
@@ -141,7 +168,7 @@ table = pd.DataFrame(rows)
 candidates = table[table["Signal"].isin(["BUY", "SELL"])]
 best = None if candidates.empty else candidates.sort_values("Confidence", ascending=False).iloc[0].to_dict()
 
-# ---------- Всплывающее уведомление ----------
+# ---------- Уведомление ----------
 if "last_signal" not in st.session_state:
     st.session_state["last_signal"] = ""
 
@@ -179,7 +206,7 @@ if best:
         f"""
         <div style='border:2px solid {color};padding:15px;border-radius:10px;background:#161a25'>
         <h3 style='color:{color}'>{emoji} Лучший сигнал: {best['Pair']} — {best['Signal']} ({best['Confidence']}%)</h3>
-        <p>Цена: {best['Price']} | RSI: {best['RSI']}</p>
+        <p>Цена: {best['Price']} | RSI: {best['RSI']} | Волатильность: {best['Volatility']}</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -189,11 +216,9 @@ if best:
         notify_with_popup(best["Pair"], best["Signal"], best["Confidence"])
         st.session_state["last_signal"] = key
 
-    # ===== ГРАФИК СВЕЧЕЙ =====
     df, sig = signals_data[best["Pair"]]
     fig = go.Figure(data=[go.Candlestick(
-        x=df.index,
-        open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
         increasing_line_color='#00ffcc', decreasing_line_color='#ff4b4b'
     )])
     fig.add_trace(go.Scatter(x=df.index, y=sig["ema_fast"], line=dict(color='yellow', width=1), name='EMA 9'))

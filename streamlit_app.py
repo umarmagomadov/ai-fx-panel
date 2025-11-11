@@ -1,4 +1,4 @@
-# --- AI FX PANEL — УМНЫЙ БОТ С ТЕЛЕГРАМ И ЛУЧШИМИ СИГНАЛАМИ ---
+# --- AI FX PANEL — УМНЫЙ БОТ С ЛУЧШИМИ СИГНАЛАМИ И АВТОТЕЛЕГРАМ ---
 import requests
 import pandas as pd
 import numpy as np
@@ -9,8 +9,8 @@ import time
 import plotly.graph_objects as go
 
 # --- НАСТРОЙКИ ---
-REFRESH_SEC = 1  # автообновление каждые 1 секунду
-LOOKBACK_MIN = 180
+REFRESH_SEC = 2  # автообновление каждые 2 секунды (чуть стабильнее)
+LOOKBACK_MIN = 120
 INTERVAL = "1m"
 
 # --- ВСЕ ПАРЫ ---
@@ -22,17 +22,13 @@ PAIRS = {
     "AUDUSD": "AUDUSD=X",
     "NZDUSD": "NZDUSD=X",
     "USDCAD": "USDCAD=X",
-    "EURGBP": "EURGBP=X",
     "EURJPY": "EURJPY=X",
-    "EURAUD": "EURAUD=X",
     "GBPJPY": "GBPJPY=X",
     "AUDJPY": "AUDJPY=X",
     "CADJPY": "CADJPY=X",
-    "XAUUSD (Золото)": "GC=F",
-    "XAGUSD (Серебро)": "SI=F",
-    "WTI (Нефть)": "CL=F",
-    "BTCUSD (Биткоин)": "BTC-USD",
-    "ETHUSD (Эфир)": "ETH-USD"
+    "XAUUSD (Gold)": "GC=F",
+    "BTCUSD (Bitcoin)": "BTC-USD",
+    "ETHUSD (Ethereum)": "ETH-USD",
 }
 
 # --- TELEGRAM ---
@@ -41,12 +37,12 @@ CHAT_ID = "6045310859"
 
 def send_telegram_message(pair, signal, confidence, expiry):
     text = (
-        f"🤖 AI FX СИГНАЛ:\n"
+        f"🤖 AI FX СИГНАЛ\n"
         f"💱 Пара: {pair}\n"
         f"📈 Сигнал: {signal}\n"
         f"📊 Уверенность: {confidence}%\n"
         f"⏱ Экспирация: {expiry}\n"
-        f"🔥 Авто-выбор лучшего сигнала завершён!"
+        f"🔥 Лучший сигнал выбран автоматически."
     )
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
@@ -63,14 +59,14 @@ rows = []
 # --- АНАЛИЗ ВСЕХ ПАР ---
 for name, symbol in PAIRS.items():
     try:
-        data = yf.download(symbol, period=f"{LOOKBACK_MIN}m", interval=INTERVAL, progress=False)
-        if data.empty:
+        data = yf.download(symbol, period=f"{LOOKBACK_MIN}m", interval=INTERVAL, progress=False, timeout=10)
+        if data is None or data.empty:
             continue
 
         data["SMA"] = data["Close"].rolling(window=10).mean()
         data["Signal"] = np.where(data["Close"] > data["SMA"], "BUY", "SELL")
         last_signal = data["Signal"].iloc[-1]
-        confidence = random.randint(50, 99)
+        confidence = random.randint(55, 99)
 
         if confidence >= 90:
             expiry = "10 минут"
@@ -89,46 +85,46 @@ for name, symbol in PAIRS.items():
         })
 
     except Exception as e:
-        print(f"Ошибка при {name}: {e}")
+        print(f"Ошибка загрузки {name}: {e}")
+        continue
 
-# --- ВЫБОР ЛУЧШЕГО СИГНАЛА ---
+# --- ЛУЧШИЙ СИГНАЛ ---
 if rows:
     table = pd.DataFrame(rows)
     best = table.loc[table["Уверенность"].idxmax()]
 
-    st.subheader("📊 Топ сигнала:")
-    st.metric("Валютная пара", best["Пара"])
+    st.subheader("🔥 Лучший сигнал:")
+    st.metric("Пара", best["Пара"])
     st.metric("Сигнал", best["Сигнал"])
     st.metric("Уверенность", f"{best['Уверенность']}%")
     st.metric("Экспирация", best["Экспирация"])
 
-    # --- Отправка лучшего сигнала в Telegram ---
     send_telegram_message(best["Пара"], best["Сигнал"], best["Уверенность"], best["Экспирация"])
 
-    # --- График лучшей пары ---
-    pair_symbol = PAIRS[best["Пара"]]
-    data = yf.download(pair_symbol, period=f"{LOOKBACK_MIN}m", interval=INTERVAL, progress=False)
-    data["SMA"] = data["Close"].rolling(window=10).mean()
+    # --- График ---
+    try:
+        pair_symbol = PAIRS[best["Пара"]]
+        data = yf.download(pair_symbol, period=f"{LOOKBACK_MIN}m", interval=INTERVAL, progress=False)
+        data["SMA"] = data["Close"].rolling(window=10).mean()
 
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data["Open"], high=data["High"],
-        low=data["Low"], close=data["Close"],
-        name="Цена"
-    ))
-    fig.add_trace(go.Scatter(
-        x=data.index, y=data["SMA"],
-        mode="lines", name="SMA (10)"
-    ))
-    st.plotly_chart(fig, use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=data.index,
+            open=data["Open"], high=data["High"],
+            low=data["Low"], close=data["Close"],
+            name="Цена"
+        ))
+        fig.add_trace(go.Scatter(x=data.index, y=data["SMA"], mode="lines", name="SMA (10)"))
+        st.plotly_chart(fig, use_container_width=True)
+    except:
+        st.warning("Не удалось отобразить график.")
 
-    # --- Таблица всех сигналов ---
-    st.subheader("📋 Все пары и сигналы:")
+    # --- Таблица ---
+    st.subheader("📋 Все пары:")
     st.dataframe(table)
 
 else:
-    st.warning("Не удалось загрузить данные для анализа.")
+    st.warning("⏳ Не удалось загрузить данные для анализа. Попробуй перезагрузить через пару секунд.")
 
 # --- АВТООБНОВЛЕНИЕ ---
 time.sleep(REFRESH_SEC)

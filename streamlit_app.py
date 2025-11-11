@@ -234,3 +234,30 @@ st.divider()
 st.subheader("📊 Все пары по уверенности:")
 st.dataframe(table.sort_values("Confidence", ascending=False).reset_index(drop=True), use_container_width=True)
 st.caption(f"Последнее обновление: {pd.Timestamp.utcnow().strftime('%H:%M:%S')} UTC")
+# 🔔 Уведомление при сильном сигнале
+import streamlit.components.v1 as components
+
+# Если есть активный сигнал с уверенностью выше 70%
+if not best_signal.empty and best_signal['Confidence'].iloc[0] > 70:
+    signal_type = best_signal['Signal'].iloc[0]
+    pair = best_signal['Pair'].iloc[0]
+    confidence = best_signal['Confidence'].iloc[0]
+    st.success(f"🚀 Сильный сигнал: {pair} — {signal_type} ({confidence:.1f}%)")
+
+    # Встроенное уведомление браузера + звук
+    components.html("""
+        <script>
+        const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+        audio.play();
+        if (Notification.permission !== "granted") {
+            Notification.requestPermission();
+        }
+        new Notification("AI FX Panel", {
+            body: "Сильный сигнал на рынке! Проверь панель 👇",
+            icon: "https://em-content.zobj.net/source/microsoft-teams/337/chart-increasing_1f4c8.png"
+        });
+        if (navigator.vibrate) {
+            navigator.vibrate([200, 100, 200]);
+        }
+        </script>
+    """, height=0)

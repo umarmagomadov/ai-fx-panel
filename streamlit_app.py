@@ -1,4 +1,4 @@
-# --- TELEGRAM АВТО-СООБЩЕНИЯ ---
+ АВТО-СООБЩЕНИЯ ---
 import requests
 
 # Твои данные:
@@ -188,10 +188,6 @@ if best is not None:
         expiry = "5 минут"
     elif confidence >= 50:
         expiry = "3 минуты"
-    else:
-        expiry = "1–2 минуты (осторожно, слабый сигнал)"
-    st.write(f"⏱ Рекомендуемое время экспирации: **{expiry}**")
-## --- Отправляем сигнал в Telegram ---
     send_telegram_message(best["Pair"], best["Signal"], round(confidence, 1), expiry) ---------- Уведомление ----------
 if "last_signal" not in st.session_state:
     st.session_state["last_signal"] = ""
@@ -309,4 +305,4 @@ if "best_signal" in locals() and not best_signal.empty:
     💰 Цена: {price:.5f} | RSI: {rsi:.1f}<br>
     ⏱ Рекомендуемая экспирация: <b>{expiry}</b></p>
     </div>
-    """, unsafe_allow_html=True)
+    """, unsafe_allow_html

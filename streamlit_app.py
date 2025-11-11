@@ -101,6 +101,38 @@ if rows:
     st.dataframe(table)
 else:
     st.warning("⚠️ Не удалось получить сигналы.")
+# --- УВЕДОМЛЕНИЕ ---
+import streamlit.components.v1 as components
 
+alert_html = """
+<script>
+    const playSound = () => {
+        let sound;
+        if ("{{signal}}" === "BUY") {
+            sound = "https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg";
+        } else {
+            sound = "https://actions.google.com/sounds/v1/alarms/beep_short.ogg";
+        }
+        const audio = new Audio(sound);
+        audio.play();
+        document.body.style.backgroundColor = '#fff3cd';
+        setTimeout(() => { document.body.style.backgroundColor = 'white'; }, 600);
+    };
+    playSound();
+</script>
+""".replace("{{signal}}", str(best["Сигнал"]))
+
+components.html(alert_html, height=0)
+
+# Отправка обновлённого сигнала в Telegram
+send_telegram_message(
+    best["Пара"],
+    best["Сигнал"],
+    best["Уверенность"],
+    best["Экспирация"],
+    "РЕАЛ" if market_open else "ДЕМО"
+)
+
+# Пауза перед обновлением
 time.sleep(REFRESH_SEC)
 st.rerun()

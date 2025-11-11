@@ -167,7 +167,18 @@ for name, ticker in PAIRS.items():
 table = pd.DataFrame(rows)
 candidates = table[table["Signal"].isin(["BUY", "SELL"])]
 best = None if candidates.empty else candidates.sort_values("Confidence", ascending=False).iloc[0].to_dict()
-
+# 💡 Автоматическое время экспирации
+if best is not None:
+    confidence = best["Confidence"]
+    if confidence >= 85:
+        expiry = "10 минут"
+    elif confidence >= 70:
+        expiry = "5 минут"
+    elif confidence >= 50:
+        expiry = "3 минуты"
+    else:
+        expiry = "1–2 минуты (осторожно, слабый сигнал)"
+    st.write(f"⏱ Рекомендуемое время экспирации: **{expiry}**")
 # ---------- Уведомление ----------
 if "last_signal" not in st.session_state:
     st.session_state["last_signal"] = ""

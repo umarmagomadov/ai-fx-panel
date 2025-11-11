@@ -7,7 +7,21 @@ import random
 import time
 import plotly.graph_objects as go
 from datetime import datetime
-# --- TELEGRAM НАСТРОЙКИ ---
+# --- TELEGRAM НАСТРОЙКИ ---# --- ТЕСТ ОТПРАВКИ СООБЩЕНИЯ ---
+if st.button("📩 Отправить тестовое сообщение в Telegram"):
+    try:
+        test_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        test_data = {
+            "chat_id": CHAT_ID,
+            "text": "✅ Тест: соединение с Telegram работает!",
+        }
+        r = requests.post(test_url, data=test_data)
+        if r.status_code == 200:
+            st.success("Сообщение успешно отправлено ✅")
+        else:
+            st.error(f"Ошибка при отправке: {r.text}")
+    except Exception as e:
+        st.error(f"Ошибка соединения: {e}")
 import streamlit as st
 
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]

@@ -4,6 +4,7 @@ import pandas as pd
 import yfinance as yf
 import streamlit as st
 import random
+import plotly.graph_objects as go
 
 # ---------- НАСТРОЙКИ ----------
 REFRESH_SEC = 1  # Обновление каждую секунду
@@ -81,7 +82,7 @@ def make_signal(df):
         conf += (abs(ema_fast.iloc[-1] - ema_slow.iloc[-1]) / last) * 10000
     conf = float(np.clip(conf, 0, 100))
 
-    return {"signal": signal, "confidence": round(conf, 1), "price": float(last), "rsi": round(r, 1)}
+    return {"signal": signal, "confidence": round(conf, 1), "price": float(last), "rsi": round(r, 1), "ema_fast": ema_fast, "ema_slow": ema_slow, "upper": upper, "lower": lower}
 
 # ---------- ЗАГРУЗКА ----------
 @st.cache_data(ttl=1)
@@ -92,14 +93,17 @@ def load_pair(ticker):
             return df
     except:
         pass
-    # --- симуляция, если нет данных ---
+    # --- симуляция ---
     data = pd.DataFrame({
-        "Close": np.cumsum(np.random.randn(300)) / 100 + random.uniform(1.05, 1.25)
+        "Open": np.random.uniform(1.1, 1.2, 200),
+        "High": np.random.uniform(1.2, 1.25, 200),
+        "Low": np.random.uniform(1.05, 1.15, 200),
+        "Close": np.cumsum(np.random.randn(200)) / 100 + random.uniform(1.1, 1.25)
     })
     return data
 
 # ---------- UI ----------
-st.set_page_config(page_title="AI FX Ultra Panel (Dark+Test)", layout="wide")
+st.set_page_config(page_title="AI FX Ultra Panel (Dark+Chart)", layout="wide")
 st.markdown("""
     <style>
     body { background-color: #0e1117; color: #fafafa; }
@@ -108,18 +112,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='color:#00c3ff'>🌙 AI FX Ultra Panel PRO++ (Тёмный режим + Тест)</h1>", unsafe_allow_html=True)
-st.caption("RSI + MACD + EMA + Bollinger · автообновление 1 секунда · ночной стиль + тестовые сигналы")
+st.markdown("<h1 style='color:#00ffcc'>🌙 AI FX Ultra Panel PRO++ (Dark + Chart)</h1>", unsafe_allow_html=True)
+st.caption("RSI + MACD + EMA + Bollinger · обновление 1 секунда · ночной режим + график свечей")
 
 # автообновление
 st.markdown(f"<script>setTimeout(()=>window.location.reload(), {REFRESH_SEC*1000});</script>", unsafe_allow_html=True)
 
 # ---------- Анализ всех валют ----------
 rows = []
+signals_data = {}
 for name, ticker in PAIRS.items():
     df = load_pair(ticker)
     sig = make_signal(df)
-    # имитация тестовых сигналов
+    # тестовые сигналы
     if random.random() < 0.05:
         sig["signal"] = random.choice(["BUY", "SELL"])
         sig["confidence"] = random.uniform(60, 99)
@@ -130,12 +135,13 @@ for name, ticker in PAIRS.items():
         "Price": sig["price"],
         "RSI": sig["rsi"],
     })
+    signals_data[name] = (df, sig)
 
 table = pd.DataFrame(rows)
 candidates = table[table["Signal"].isin(["BUY", "SELL"])]
 best = None if candidates.empty else candidates.sort_values("Confidence", ascending=False).iloc[0].to_dict()
 
-# ---------- уведомление ----------
+# ---------- Всплывающее уведомление ----------
 if "last_signal" not in st.session_state:
     st.session_state["last_signal"] = ""
 
@@ -146,7 +152,7 @@ def notify_with_popup(pair, signal, conf):
     <script>
         var audio = new Audio("{sound_url}");
         audio.play();
-        if (navigator.vibrate) navigator.vibrate(500);
+        if (navigator.vibrate) navigator.vibrate(400);
         let popup = document.createElement("div");
         popup.style.position = "fixed";
         popup.style.bottom = "30px";
@@ -154,8 +160,8 @@ def notify_with_popup(pair, signal, conf):
         popup.style.transform = "translateX(-50%)";
         popup.style.background = "{color}";
         popup.style.color = "white";
-        popup.style.padding = "16px 24px";
-        popup.style.borderRadius = "12px";
+        popup.style.padding = "14px 20px";
+        popup.style.borderRadius = "10px";
         popup.style.fontSize = "18px";
         popup.style.boxShadow = "0 4px 10px rgba(0,0,0,0.3)";
         popup.innerHTML = "🔥 {signal} сигнал — {pair} ({conf}%)";
@@ -165,7 +171,7 @@ def notify_with_popup(pair, signal, conf):
     """
     st.markdown(js, unsafe_allow_html=True)
 
-# ---------- вывод ----------
+# ---------- Вывод ----------
 if best:
     color = "#2ecc71" if best["Signal"] == "BUY" else "#e74c3c"
     emoji = "🟢" if best["Signal"] == "BUY" else "🔴"
@@ -182,6 +188,20 @@ if best:
     if best["Confidence"] >= 70 and st.session_state["last_signal"] != key:
         notify_with_popup(best["Pair"], best["Signal"], best["Confidence"])
         st.session_state["last_signal"] = key
+
+    # ===== ГРАФИК СВЕЧЕЙ =====
+    df, sig = signals_data[best["Pair"]]
+    fig = go.Figure(data=[go.Candlestick(
+        x=df.index,
+        open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        increasing_line_color='#00ffcc', decreasing_line_color='#ff4b4b'
+    )])
+    fig.add_trace(go.Scatter(x=df.index, y=sig["ema_fast"], line=dict(color='yellow', width=1), name='EMA 9'))
+    fig.add_trace(go.Scatter(x=df.index, y=sig["ema_slow"], line=dict(color='orange', width=1), name='EMA 21'))
+    fig.add_trace(go.Scatter(x=df.index, y=sig["upper"], line=dict(color='gray', width=0.5, dash='dot'), name='Bollinger Top'))
+    fig.add_trace(go.Scatter(x=df.index, y=sig["lower"], line=dict(color='gray', width=0.5, dash='dot'), name='Bollinger Bottom'))
+    fig.update_layout(template='plotly_dark', height=400, margin=dict(l=10, r=10, t=30, b=20))
+    st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Нет активных сигналов (данные симулируются).")
 

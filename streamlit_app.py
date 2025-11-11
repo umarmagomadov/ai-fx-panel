@@ -261,3 +261,28 @@ if not best_signal.empty and best_signal['Confidence'].iloc[0] > 70:
         }
         </script>
     """, height=0)
+# ✅ Безошибочная версия с рекомендацией по экспирации
+
+if "best_signal" in locals() and not best_signal.empty:
+    pair = best_signal["Pair"].iloc[0]
+    signal_type = best_signal["Signal"].iloc[0]
+    confidence = best_signal["Confidence"].iloc[0]
+    price = best_signal["Price"].iloc[0]
+    rsi = best_signal["RSI"].iloc[0]
+
+    # Определение рекомендуемой экспирации
+    if confidence >= 85:
+        expiry = "10 минут"
+    elif confidence >= 70:
+        expiry = "5 минут"
+    else:
+        expiry = "2–3 минуты"
+
+    st.markdown(f"""
+    <div style='background-color:#330000;padding:15px;border-radius:12px;border:2px solid #ff4444;'>
+    <h3 style='color:#ff4444;'>🔴 Лучший сигнал: {pair} — {signal_type}</h3>
+    <p style='color:white;'>📊 Уверенность: <b>{confidence:.1f}%</b><br>
+    💰 Цена: {price:.5f} | RSI: {rsi:.1f}<br>
+    ⏱ Рекомендуемая экспирация: <b>{expiry}</b></p>
+    </div>
+    """, unsafe_allow_html=True)

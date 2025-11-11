@@ -3,9 +3,10 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
+import random
 
 # ---------- НАСТРОЙКИ ----------
-REFRESH_SEC = 1  # 🔁 Обновление каждую секунду
+REFRESH_SEC = 1  # Обновление каждую секунду
 LOOKBACK_MIN = 180
 INTERVAL = "1m"
 MIN_BARS = 50
@@ -90,25 +91,38 @@ def load_pair(ticker):
         if len(df) > MIN_BARS:
             return df
     except:
-        return None
-    return None
+        pass
+    # --- симуляция, если нет данных ---
+    data = pd.DataFrame({
+        "Close": np.cumsum(np.random.randn(300)) / 100 + random.uniform(1.05, 1.25)
+    })
+    return data
 
 # ---------- UI ----------
-st.set_page_config(page_title="AI FX Ultra Panel 1s", layout="wide")
-st.title("⚡ AI FX Ultra Panel (обновление 1 сек) 🔔📳💬")
-st.caption("RSI + MACD + EMA + Bollinger · Обновление каждую секунду · Вибрация + звук + pop-up уведомление")
+st.set_page_config(page_title="AI FX Ultra Panel (Dark+Test)", layout="wide")
+st.markdown("""
+    <style>
+    body { background-color: #0e1117; color: #fafafa; }
+    .stApp { background-color: #0e1117; }
+    div[data-testid="stDataFrame"] { background-color: #161a25 !important; color: white !important; }
+    </style>
+""", unsafe_allow_html=True)
 
-# Автообновление каждую секунду
+st.markdown("<h1 style='color:#00c3ff'>🌙 AI FX Ultra Panel PRO++ (Тёмный режим + Тест)</h1>", unsafe_allow_html=True)
+st.caption("RSI + MACD + EMA + Bollinger · автообновление 1 секунда · ночной стиль + тестовые сигналы")
+
+# автообновление
 st.markdown(f"<script>setTimeout(()=>window.location.reload(), {REFRESH_SEC*1000});</script>", unsafe_allow_html=True)
 
 # ---------- Анализ всех валют ----------
 rows = []
 for name, ticker in PAIRS.items():
     df = load_pair(ticker)
-    if df is None:
-        rows.append({"Pair": name, "Signal": "—", "Confidence": 0.0, "Price": None, "RSI": None})
-        continue
     sig = make_signal(df)
+    # имитация тестовых сигналов
+    if random.random() < 0.05:
+        sig["signal"] = random.choice(["BUY", "SELL"])
+        sig["confidence"] = random.uniform(60, 99)
     rows.append({
         "Pair": name,
         "Signal": sig["signal"],
@@ -121,12 +135,12 @@ table = pd.DataFrame(rows)
 candidates = table[table["Signal"].isin(["BUY", "SELL"])]
 best = None if candidates.empty else candidates.sort_values("Confidence", ascending=False).iloc[0].to_dict()
 
-# ---------- УВЕДОМЛЕНИЯ ----------
+# ---------- уведомление ----------
 if "last_signal" not in st.session_state:
     st.session_state["last_signal"] = ""
 
 def notify_with_popup(pair, signal, conf):
-    color = "green" if signal == "BUY" else "red"
+    color = "#2ecc71" if signal == "BUY" else "#e74c3c"
     sound_url = "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
     js = f"""
     <script>
@@ -146,31 +160,30 @@ def notify_with_popup(pair, signal, conf):
         popup.style.boxShadow = "0 4px 10px rgba(0,0,0,0.3)";
         popup.innerHTML = "🔥 {signal} сигнал — {pair} ({conf}%)";
         document.body.appendChild(popup);
-        setTimeout(()=>popup.remove(), 3000);
+        setTimeout(()=>popup.remove(), 4000);
     </script>
     """
     st.markdown(js, unsafe_allow_html=True)
 
-# ---------- ВЫВОД ----------
+# ---------- вывод ----------
 if best:
-    color = "green" if best["Signal"] == "BUY" else "red"
+    color = "#2ecc71" if best["Signal"] == "BUY" else "#e74c3c"
     emoji = "🟢" if best["Signal"] == "BUY" else "🔴"
     st.markdown(
         f"""
-        <div style='border:2px solid {color};padding:15px;border-radius:10px'>
-        <h3>{emoji} Лучший сигнал: {best['Pair']} — {best['Signal']} ({best['Confidence']}%)</h3>
-        Цена: {best['Price']} | RSI: {best['RSI']}
+        <div style='border:2px solid {color};padding:15px;border-radius:10px;background:#161a25'>
+        <h3 style='color:{color}'>{emoji} Лучший сигнал: {best['Pair']} — {best['Signal']} ({best['Confidence']}%)</h3>
+        <p>Цена: {best['Price']} | RSI: {best['RSI']}</p>
         </div>
         """,
         unsafe_allow_html=True
     )
-
     key = f"{best['Pair']}_{best['Signal']}"
     if best["Confidence"] >= 70 and st.session_state["last_signal"] != key:
         notify_with_popup(best["Pair"], best["Signal"], best["Confidence"])
         st.session_state["last_signal"] = key
 else:
-    st.warning("Нет активных сигналов.")
+    st.info("Нет активных сигналов (данные симулируются).")
 
 st.divider()
 st.subheader("📊 Все пары по уверенности:")

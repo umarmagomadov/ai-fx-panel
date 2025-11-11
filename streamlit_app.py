@@ -14,8 +14,7 @@ def send_telegram_message(pair, signal, confidence, expiry):
     except Exception as e:
         print("Ошибка при отправке в Telegram:", e)import requests
 
-TELEGRAM_TOKEN = "8188894081:AAHr7im0L7CWcgiScOnKMLqo7g3I7R0s_80"
-CHAT_ID = "сюда_вставь_твой_chat_id"  # узнаем на следующем шаге
+
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"

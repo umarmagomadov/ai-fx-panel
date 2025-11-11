@@ -8,8 +8,10 @@ import time
 import plotly.graph_objects as go
 from datetime import datetime
 # --- TELEGRAM НАСТРОЙКИ ---
-TELEGRAM_TOKEN = "8188894081:AAHr7im0L7CWcgiS..."
-CHAT_ID = "6045310859"  # твой Telegram ID
+import streamlit as st
+
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+CHAT_ID = st.secrets["CHAT_ID"] # твой Telegram ID
 
 def send_telegram_message(pair, signal, confidence, expiry, mode):
     text = (

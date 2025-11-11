@@ -14,15 +14,6 @@ def send_telegram_message(pair, signal, confidence, expiry):
     except Exception as e:
         print("Ошибка при отправке в Telegram:", e)import requests
 
-
-
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text}
-    requests.post(url, data=data)import time
-import numpy as np
-import pandas as pd
-import yfinance as yf
 import streamlit as st
 import random
 import plotly.graph_objects as go

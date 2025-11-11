@@ -25,12 +25,15 @@ try:
         last = data["Close"].iloc[-1]
         mean = data["Close"].rolling(10).mean().iloc[-1]
 
-        if last > mean:
-            st.success("🟢 BUY сигнал — тренд вверх")
-        elif last < mean:
-            st.error("🔴 SELL сигнал — тренд вниз")
-        else:
-            st.info("⚪ Нейтральный сигнал — жди подтверждения")
+      last = float(data["Close"].iloc[-1])
+mean = float(data["Close"].rolling(10).mean().iloc[-1])
+
+if last > mean:
+    st.success("🟢 BUY сигнал — тренд вверх")
+elif last < mean:
+    st.error("🔴 SELL сигнал — тренд вниз")
+else:
+    st.info("⚪ Нейтральный сигнал — жди подтверждения")
 
         st.caption(f"Последняя цена: {last:.5f}")
     else:

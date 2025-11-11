@@ -1,4 +1,4 @@
-# --- AI FX PANEL — УМНЫЙ БОТ (РЕАЛЬНЫЕ + ДЕМО СИГНАЛЫ) ---
+— УМНЫЙ БОТ (РЕАЛЬНЫЕ + ДЕМО СИГНАЛЫ) ---
 import requests
 import pandas as pd
 import numpy as np
@@ -152,5 +152,4 @@ else:
     st.warning("⏳ Не удалось загрузить данные для анализа. Попробуй позже.")
 
 # --- АВТООБНОВЛЕНИЕ ---
-time.sleep(REFRESH_SEC)
-st.rerun()
+time.sleep(REFRESH_SEC

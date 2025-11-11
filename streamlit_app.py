@@ -10,8 +10,8 @@ from datetime import datetime
 # --- TELEGRAM НАСТРОЙКИ ---
 import streamlit as st
 
-TELEGRAM_TOKEN="8188894081:AAHr7im0L7CWCgiSc0nKMLqo7g3I7ROs_80"
-CHAT_ID="6045310859"
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+CHAT_ID = st.secrets["CHAT_ID"]
 
 def send_telegram_message(pair, signal, confidence, expiry, mode):
     text = (

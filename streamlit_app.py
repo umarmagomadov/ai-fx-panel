@@ -118,18 +118,14 @@ def get_or_fake(symbol):
     # нет новых — используем кэш и «подвинуем» последнюю свечу
     cached = st.session_state.cache.get(symbol)
     if cached is not None and len(cached) > 0:
-        import pandas as pd  # если вверху файла нет, добавляем здесь
+        import pandas as pd
         df = cached.copy()
         last = nudge_last(df)
 
-        # если nudge_last вернул Series, превращаем в DataFrame
         if isinstance(last, pd.Series):
             last = last.to_frame().T
 
-        # объединяем DataFrame без append()
         df = pd.concat([df, last], ignore_index=False)
-
-        # сохраняем последние 600 строк в кэш
         st.session_state.cache[symbol] = df.tail(600)
         return st.session_state.cache[symbol]
 
@@ -140,28 +136,6 @@ def get_or_fake(symbol):
     df = pd.DataFrame({"Open": vals, "High": vals, "Low": vals, "Close": vals}, index=idx)
     st.session_state.cache[symbol] = df
     return df
-last = nudge_last(df)
-
-# если nudge_last вернул Series, превращаем в DataFrame
-if isinstance(last, pd.Series):
-    last = last.to_frame().T
-
-# объединяем DataFrame без append()
-df = pd.concat([df, last], ignore_index=False)
-
-# сохраняем последние 600 строк в кэш
-st.session_state.cache[symbol] = df.tail(600)
-        return st.session_state.cache[symbol]
-    # совсем пусто — сделаем маленькую синтетику
-    idx = pd.date_range(end=datetime.utcnow(), periods=120, freq="T")
-    base = 1.0 + random.random()/10
-    vals = base * (1 + np.cumsum(np.random.normal(0, 0.0005, size=len(idx))))
-    df = pd.DataFrame({"Open":vals, "High":vals*1.0008, "Low":vals*0.9992, "Close":vals}, index=idx)
-    st.session_state.cache[symbol] = df
-    return df
-
-# --------- СКОРИНГ СИГНАЛА ---------
-def score_and_signal(df):
     close = df["Close"]
     rsi_v = float(rsi(close).iloc[-1])
     ema9  = float(ema(close, 9).iloc[-1])

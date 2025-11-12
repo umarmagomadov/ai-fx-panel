@@ -242,8 +242,7 @@ text = (
     f"⏱ Экспирация: {expiry} мин\n"
     f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD']}\n"
     f"⏰ {datetime.utcnow().strftime('%H:%M:%S UTC')}"
-)
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+)   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode":"Markdown"}, timeout=10)
     except Exception as e:

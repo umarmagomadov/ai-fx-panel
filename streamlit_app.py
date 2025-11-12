@@ -1,6 +1,6 @@
-# 🤖 AI FX Signal Bot v100.7 — Triple-Timeframe Smart Mode + Pocket Copy
-# (M5+M15+M30, адаптивная экспирация, OTC-фильтр, кнопка копирования валюты)
-# Полностью исправлен, без ошибок, с улучшенным Telegram и таблицей.
+# 🤖 AI FX Signal Bot v100.7-fix — Triple-Timeframe Smart Mode + Pocket Copy
+# Исправлен TypeError: безопасная обработка данных Close и мультииндекс
+# Работает на M5 + M15 + M30 с автоэкспирацией и Telegram-сигналами
 
 import time, json, random, os
 from datetime import datetime, timezone
@@ -21,10 +21,9 @@ ONLY_NEW        = True
 MIN_SEND_GAP_S  = 60
 CONF_THRESHOLD  = 70
 
-# Таймфреймы
-TF_MAIN  = ("5m",  "2d")   # вход
-TF_MID   = ("15m", "5d")   # подтверждение
-TF_TREND = ("30m", "10d")  # тренд
+TF_MAIN  = ("5m",  "2d")
+TF_MID   = ("15m", "5d")
+TF_TREND = ("30m", "10d")
 
 # ================== Пары =====================
 PAIRS = {
@@ -68,6 +67,25 @@ def bbands(close, n=20, k=2):
     width = (up - lo) / (ma + 1e-9) * 100
     return up, ma, lo, width
 
+# ================== SAFE CLOSE ==================
+def _safe_close_series(df: pd.DataFrame) -> pd.Series:
+    """Гарантированно возвращает Series с ценами Close"""
+    if df is None or df.empty:
+        return pd.Series([], dtype="float64")
+
+    if "Close" in df.columns:
+        s = pd.to_numeric(df["Close"], errors="coerce")
+    elif any(isinstance(c, tuple) and str(c[0]).lower() == "close" for c in df.columns):
+        col = next(c for c in df.columns if isinstance(c, tuple) and str(c[0]).lower() == "close")
+        s = pd.to_numeric(df[col], errors="coerce")
+    else:
+        num = df.select_dtypes(include=[np.number])
+        if num.shape[1] == 0:
+            return pd.Series([], dtype="float64")
+        s = pd.to_numeric(num.iloc[:, -1], errors="coerce")
+
+    return s.ffill().astype("float64")
+
 # ================== DATA =====================
 @st.cache_data(show_spinner=False, ttl=60)
 def load_data(symbol, period, interval):
@@ -90,8 +108,13 @@ def pocket_code(name, symbol):
 
 # ================== СИГНАЛЫ ==================
 def score_single(df):
-    if df.empty: return "FLAT", 0, {}
-    close = pd.to_numeric(df["Close"], errors="coerce").fillna(method="ffill")
+    if df is None or df.empty:
+        return "FLAT", 0, {}
+
+    close = _safe_close_series(df)
+    if close.empty or close.size < 30:
+        return "FLAT", 0, {}
+
     rsv = float(rsi(close).iloc[-1])
     ema9, ema21 = float(ema(close,9).iloc[-1]), float(ema(close,21).iloc[-1])
     macd_line, macd_sig, macd_hist = macd(close)
@@ -121,8 +144,11 @@ def score_single(df):
     return sig, conf, feats
 
 def tf_dir(df):
-    if df.empty: return "FLAT"
-    c = df["Close"]
+    if df is None or df.empty:
+        return "FLAT"
+    c = _safe_close_series(df)
+    if c.empty or c.size < 30:
+        return "FLAT"
     macd_line, macd_sig, macd_hist = macd(c)
     rsv = float(rsi(c).iloc[-1])
     mh = float(macd_hist.iloc[-1])
@@ -155,7 +181,7 @@ def send_tg(name, symbol, signal, conf, exp, feats, mtf):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     arrow = "⬆️" if signal=="BUY" else "⬇️" if signal=="SELL" else "➖"
     text = (
-        f"🤖 AI FX СИГНАЛ v100.7\n"
+        f"🤖 AI FX СИГНАЛ v100.7-fix\n"
         f"💱 Пара: {name}\n"
         f"📌 Код для Pocket Option: `{pocket_code(name,symbol)}`\n"
         f"📈 Сигнал: {arrow} {signal}\n"
@@ -171,8 +197,8 @@ def send_tg(name, symbol, signal, conf, exp, feats, mtf):
     except: pass
 
 # ================== UI =======================
-st.set_page_config(page_title="AI FX v100.7 — M5+M15+M30", layout="wide")
-st.title("🤖 AI FX Signal Bot v100.7 — Triple-Timeframe + Pocket Copy")
+st.set_page_config(page_title="AI FX v100.7-fix — M5+M15+M30", layout="wide")
+st.title("🤖 AI FX Signal Bot v100.7-fix — Triple-Timeframe + Pocket Copy")
 
 thr = st.slider("Порог уверенности (Telegram)", 50, 95, CONF_THRESHOLD)
 rows=[]

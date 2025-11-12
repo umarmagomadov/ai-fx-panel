@@ -169,23 +169,23 @@ def choose_expiry(confidence, adx_value):
 if confidence < 60:
     print(f"⚠️ Пропущен слабый сигнал по {pair} (уверенность {confidence}%)")
     continue
-        base = 1
+        base =1
     elif confidence < 65:
-        base = 3
+        base =3
     elif confidence < 75:
-        base = 6
+        base =6
     elif confidence < 85:
-        base = 10
+        base =10
     elif confidence < 90:
-        base = 15
+        base =15
     elif confidence < 95:
-        base = 20
+        base =20
     else:
-        base = 25
+        base =25
 
     # корректировка по силе тренда ADX
-    if adx_value >= 50:
-        base += 5       # очень сильный тренд → держим дольше
+    if adx_value >=50:
+        base +=5       # очень сильный тренд → держим дольше
     elif adx_value < 20:
         base = max(1, base - 2)  # слабый тренд → понижаем
 

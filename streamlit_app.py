@@ -31,7 +31,10 @@ def send_telegram_message(pair, signal, confidence, expiry, mode):
     except Exception as e:
         print("Ошибка при отправке в Telegram:", e)
 # НАСТРОЙКИ
-REFRESH_SEC = 1
+while True:
+    REFRESH_SEC = 1
+    # твой код анализа
+    time.sleep(REFRESH_SEC)
 LOOKBACK_MIN = 120
 INTERVAL = "1m"
 

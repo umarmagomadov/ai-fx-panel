@@ -139,39 +139,69 @@ def calculate_confidence(rsi_v: float, adx_v: float, macd_hist_v: float) -> int:
     return int(max(40, min(100, round(score))))
 
 def score_and_signal(df):
-    """Возвращает (signal: BUY/SELL/FLAT, confidence:int, feats:dict)."""
     close = df["Close"]
-
-    rsi_v  = float(rsi(close).iloc[-1])
-    ema9   = float(ema(close, 9).iloc[-1])
-    ema21  = float(ema(close, 21).iloc[-1])
+    rsi_v = float(rsi(close).iloc[-1])
+    ema9  = float(ema(close, 9).iloc[-1])
+    ema21 = float(ema(close, 21).iloc[-1])
     macd_line, macd_sig, macd_hist = macd(close)
     m_hist = float(macd_hist.iloc[-1])
-
     up, mid, lo, width = bbands(close)
     bb_pos = float((close.iloc[-1] - mid.iloc[-1]) / (up.iloc[-1] - lo.iloc[-1] + 1e-9))
-    adx_v  = float(adx(df).iloc[-1])
+    adx_v = float(adx(df).iloc[-1])
 
-    # простое голосование
     votes_buy = votes_sell = 0
-    if rsi_v < 30: votes_buy += 1
-    if rsi_v > 70: votes_sell += 1
-    if ema9 > ema21: votes_buy += 1
-    if ema9 < ema21: votes_sell += 1
-    if m_hist > 0: votes_buy += 1
-    if m_hist < 0: votes_sell += 1
-    if bb_pos < -0.25: votes_buy += 1
-    if bb_pos >  0.25: votes_sell += 1
 
+    # --- RSI ---
+    if rsi_v < 30:
+        votes_buy += 1
+    if rsi_v > 70:
+        votes_sell += 1
+
+    # --- EMA тренд ---
+    if ema9 > ema21:
+        votes_buy += 1
+    if ema9 < ema21:
+        votes_sell += 1
+
+    # --- MACD ---
+    if m_hist > 0:
+        votes_buy += 1
+    if m_hist < 0:
+        votes_sell += 1
+
+    # --- Боллинджер ---
+    if bb_pos < -0.25:
+        votes_buy += 1
+    if bb_pos > 0.25:
+        votes_sell += 1
+
+    # --- Расчёт силы тренда ---
+    trend_boost = min(max((adx_v - 18) / 25, 0), 1)
+
+    # --- Определяем направление ---
     if votes_buy == votes_sell:
-        signal = "FLAT"
+        direction = "FLAT"
     elif votes_buy > votes_sell:
-        signal = "BUY"
+        direction = "BUY"
     else:
-        signal = "SELL"
+        direction = "SELL"
 
-    confidence = calculate_confidence(rsi_v, adx_v, m_hist)
+    # --- 🔥 ФИЛЬТР ПРОТИВ ТРЕНДА 🔥 ---
+    strong_down = ema9 < ema21 and adx_v > 45 and rsi_v < 25
+    strong_up   = ema9 > ema21 and adx_v > 45 and rsi_v > 75
 
+    # если идёт сильный тренд, не даём сигнал против него
+    if strong_down and direction == "BUY":
+        direction = "FLAT"
+    elif strong_up and direction == "SELL":
+        direction = "FLAT"
+
+    # --- Расчёт уверенности ---
+    raw = abs(votes_buy - votes_sell) / 4.0
+    confidence = int(100 * (0.55 * raw + 0.45 * trend_boost))
+    confidence = max(0, min(99, confidence))
+
+    # --- Формируем индикаторы для отчёта ---
     feats = dict(
         RSI=round(rsi_v, 1),
         ADX=round(adx_v, 1),
@@ -180,7 +210,8 @@ def score_and_signal(df):
         BB_Pos=round(bb_pos, 3),
         BB_Width=round(float(width.iloc[-1]), 2),
     )
-    return signal, confidence, feats
+
+    return direction, confidence, feats
 
 def choose_expiry(confidence: int, adx_value: float, rsi_value: float) -> int | None:
     """

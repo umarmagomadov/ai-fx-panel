@@ -233,21 +233,26 @@ def calculate_confidence(rsi, adx, macd):
     score += min(abs(macd) * 100000, 20)
 
     # Ограничиваем диапазон
-text = (
-    f"🤖 *AI FX СИГНАЛ*\n"
-    f"💵 Пара: {pair}\n"
-    f"📊 Сигнал: {signal}\n"
-    f"💪 Уверенность: {confidence}%\n"
-    f"⏱ Экспирация: {expiry} мин\n"
-    f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']}\n"
-    f"⏰ {datetime.utcnow().strftime('%H:%M:%S')}\n"
-)
+    confidence = max(40, min(100, round(score)))
 
-url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-try:
-    requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
-except Exception as e:
-    st.toast(f"TG error: {e}", icon="⚠️")
+    # Временная пара для теста (можно заменить на реальную переменную)
+    pair = "TEST/USD"
+
+    text = (
+        f"🤖 *AI FX СИГНАЛ*\n"
+        f"💵 Пара: {pair}\n"
+        f"📊 Сигнал: {signal}\n"
+        f"💪 Уверенность: {confidence}%\n"
+        f"⏱ Экспирация: {expiry} мин\n"
+        f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']}\n"
+        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')}\n"
+    )
+
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    try:
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+    except Exception as e:
+        st.toast(f"TG error: {e}", icon="⚠️")
 
 # --------- UI ---------
 st.set_page_config(page_title="AI FX Panel Pro", layout="wide")

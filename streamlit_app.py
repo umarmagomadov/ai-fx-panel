@@ -167,9 +167,9 @@ def choose_expiry(confidence, adx_value, rsi_value):
     # базовое время по уверенности
     # --- ФИЛЬТР УВЕРЕННОСТИ ---
 if confidence < 60:
+    if confidence < 60:
     print(f"⚠️ Пропущен слабый сигнал (уверенность {confidence}%)")
     return None  # слабый сигнал — не открываем сделку
-    # --- УМНЫЙ ВЫБОР ВРЕМЕНИ ЭКСПИРАЦИИ ---
 
 # Базовое время по уверенности сигнала
 if confidence < 65:

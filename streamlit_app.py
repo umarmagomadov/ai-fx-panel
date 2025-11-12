@@ -1,4 +1,4 @@
-# 🤖 AI FX Signal Bot v100.8-stable — Triple-Timeframe Smart Mode + Pocket Copy
+ Signal Bot v100.8-stable — Triple-Timeframe Smart Mode + Pocket Copy
 # Исправлены ошибки TypeError в ADX и загрузке данных, улучшена стабильность.
 
 import time, json, random, os
@@ -234,4 +234,4 @@ if len(df):
     st.text_input("Tap to copy:", value=top["Pocket код"], key="copy_top")
 
 time.sleep(REFRESH_SEC)
-st.rerun()
+st.rerun

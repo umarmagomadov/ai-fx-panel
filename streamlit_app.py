@@ -159,7 +159,7 @@ def score_and_signal(df):
                  BB_Width=round(float(width.iloc[-1]),2))
     return direction, confidence, feats
 
-def choose_expiry(confidence, adx_value):
+def choose_expiry(confidence, adx_value, rsi_value):
     """
     Возвращает оптимальное время экспирации (в минутах)
     на основе уверенности сигнала и силы тренда (ADX).
@@ -167,9 +167,8 @@ def choose_expiry(confidence, adx_value):
     # базовое время по уверенности
     # --- ФИЛЬТР УВЕРЕННОСТИ ---
 if confidence < 60:
-    print(f"⚠️ Пропущен слабый сигнал по {pair} (уверенность {confidence}%)")
-    continue
-        base = 1
+    print(f"⚠️ Пропущен слабый сигнал (уверенность {confidence}%)")
+    return None  # слабый сигнал — не открываем сделку
     # --- УМНЫЙ ВЫБОР ВРЕМЕНИ ЭКСПИРАЦИИ ---
 
 # Базовое время по уверенности сигнала

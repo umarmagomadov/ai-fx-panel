@@ -236,17 +236,19 @@ def calculate_confidence(rsi, adx, macd):
 confidence = max(40, min(100, round(score)))
 text = (
     f"🤖 *AI FX СИГНАЛ*\n"
-    f"💲 Пара: {pair}\n"
+    f"💵 Пара: {pair}\n"
     f"📊 Сигнал: {signal}\n"
     f"💪 Уверенность: {confidence}%\n"
     f"⏱ Экспирация: {expiry} мин\n"
-    f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD']}\n"
-    f"⏰ {datetime.utcnow().strftime('%H:%M:%S UTC')}"
-)   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode":"Markdown"}, timeout=10)
-    except Exception as e:
-        st.toast(f"TG error: {e}", icon="⚠️")
+    f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']}\n"
+    f"⏰ {datetime.utcnow().strftime('%H:%M:%S')}\n"
+)
+
+url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+try:
+    requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+except Exception as e:
+    st.toast(f"TG error: {e}", icon="⚠️")
 
 # --------- UI ---------
 st.set_page_config(page_title="AI FX Panel Pro", layout="wide")

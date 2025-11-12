@@ -290,16 +290,30 @@ st.subheader("📋 Рейтинг сигналов")
 st.dataframe(df_show, use_container_width=True, height=440)
 
 # --------- ГРАФИК ЛУЧШЕЙ ПАРЫ ---------
+dfc = None
+top = None
+
 if len(df_show):
     top = df_show.iloc[0]
-    sym = PAIRS[top["Пара"]]
-    dfc = get_or_fake(sym)
-    if dfc is not None and len(dfc):
-        fig = go.Figure(data=[go.Candlestick(x=dfc.index, open=dfc["Open"], high=dfc["High"],
-                                             low=dfc["Low"], close=dfc["Close"])])
-        fig.update_layout(height=380, margin=dict(l=0, r=0, t=20, b=0),
-                          title=f"Топ: {top['Пара']} — {top['Сигнал']} ({top['Уверенность']}%)")
-        st.plotly_chart(fig, use_container_width=True)
+    sym = PAIRS.get(top["Пара"])
+    if sym:
+        dfc = get_or_fake(sym)
+
+if dfc is not None and len(dfc):
+    fig = go.Figure(data=[go.Candlestick(
+        x=dfc.index,
+        open=dfc["Open"],
+        high=dfc["High"],
+        low=dfc["Low"],
+        close=dfc["Close"]
+    )])
+    title_txt = f"Топ: {top['Пара']} — {top['Сигнал']} ({top['Уверенность']}%)" if top is not None else "Топ"
+    fig.update_layout(
+        height=380,
+        margin=dict(l=0, r=0, t=20, b=0),
+        title=title_txt
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 # --------- АВТООБНОВЛЕНИЕ ---------
 time.sleep(REFRESH_SEC)

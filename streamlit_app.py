@@ -103,9 +103,20 @@ def get_or_fake(symbol):
     # нет новых — используем кэш и «подвигаем» один бар, чтобы индикаторы считались
     cached = st.session_state.cache.get(symbol)
     if cached is not None and len(cached) > 0:
-        df = cached.copy()
-        df = df.append(nudge_last(df), verify_integrity=False)
-        st.session_state.cache[symbol] = df.tail(600)
+        import pandas as pd  # если вверху файла нет — добавь один раз
+
+df = cached.copy()
+last = nudge_last(df)
+
+# если nudge_last вернул Series, превращаем в DataFrame
+if isinstance(last, pd.Series):
+    last = last.to_frame().T
+
+# объединяем DataFrame без append()
+df = pd.concat([df, last], ignore_index=False)
+
+# сохраняем последние 600 строк в кэш
+st.session_state.cache[symbol] = df.tail(600)
         return st.session_state.cache[symbol]
     # совсем пусто — сделаем маленькую синтетику
     idx = pd.date_range(end=datetime.utcnow(), periods=120, freq="T")

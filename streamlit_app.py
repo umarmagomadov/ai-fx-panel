@@ -9,14 +9,6 @@ TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = st.secrets["CHAT_ID"]
 
 st.title("AI FX Panel")
-
-
-import random
-import time
-import plotly.graph_objects as go
-from datetime import datetime
-# --- TELEGRAM НАСТРОЙКИ ---# --- ТЕСТ ОТПРАВКИ СООБЩЕНИЯ ---
-if st.button("📩 Отправить тестовое сообщение в Telegram"):
     try:
         test_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         test_data = {

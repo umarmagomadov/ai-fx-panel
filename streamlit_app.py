@@ -1,6 +1,5 @@
-# 🤖 AI FX Signal Bot v100.7-fix — Triple-Timeframe Smart Mode + Pocket Copy
-# Исправлен TypeError: безопасная обработка данных Close и мультииндекс
-# Работает на M5 + M15 + M30 с автоэкспирацией и Telegram-сигналами
+# 🤖 AI FX Signal Bot v100.7-final — Triple-Timeframe Smart Mode + Pocket Copy
+# Исправлены все ошибки TypeError при обработке мультииндексных данных из yfinance
 
 import time, json, random, os
 from datetime import datetime, timezone
@@ -25,7 +24,6 @@ TF_MAIN  = ("5m",  "2d")
 TF_MID   = ("15m", "5d")
 TF_TREND = ("30m", "10d")
 
-# ================== Пары =====================
 PAIRS = {
     "EURUSD":"EURUSD=X","GBPUSD":"GBPUSD=X","USDJPY":"USDJPY=X","AUDUSD":"AUDUSD=X","NZDUSD":"NZDUSD=X",
     "BTCUSD (Bitcoin)":"BTC-USD","ETHUSD (Ethereum)":"ETH-USD","XAUUSD (Gold)":"GC=F","BRENT (Oil)":"BZ=F",
@@ -48,7 +46,8 @@ def macd(close, fast=12, slow=26, signal=9):
     return m, s, m - s
 
 def adx(df, n=14):
-    if df is None or len(df) < n+2: return pd.Series([25]*len(df), index=df.index)
+    if df is None or len(df) < n+2 or "High" not in df or "Low" not in df or "Close" not in df:
+        return pd.Series([25]*len(df), index=df.index)
     h, l, c = df["High"], df["Low"], df["Close"]
     up_move = h.diff(); dn_move = -l.diff()
     plus_dm  = up_move.where((up_move>0)&(up_move>dn_move), 0.0).fillna(0)
@@ -69,22 +68,38 @@ def bbands(close, n=20, k=2):
 
 # ================== SAFE CLOSE ==================
 def _safe_close_series(df: pd.DataFrame) -> pd.Series:
-    """Гарантированно возвращает Series с ценами Close"""
-    if df is None or df.empty:
+    """Безопасно извлекает колонку Close из любых форматов DataFrame"""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return pd.Series([], dtype="float64")
 
-    if "Close" in df.columns:
-        s = pd.to_numeric(df["Close"], errors="coerce")
-    elif any(isinstance(c, tuple) and str(c[0]).lower() == "close" for c in df.columns):
-        col = next(c for c in df.columns if isinstance(c, tuple) and str(c[0]).lower() == "close")
-        s = pd.to_numeric(df[col], errors="coerce")
+    # Если мультииндекс — убираем уровень
+    if isinstance(df.columns, pd.MultiIndex):
+        if ("Close" in df.columns.get_level_values(0)):
+            df = df["Close"]
+            if isinstance(df, pd.DataFrame):
+                # Берем первый столбец
+                df = df.iloc[:,0]
+        elif "close" in df.columns.get_level_values(0):
+            df = df["close"]
+            if isinstance(df, pd.DataFrame):
+                df = df.iloc[:,0]
+
+    # Если осталась колонка Close
+    if isinstance(df, pd.DataFrame) and "Close" in df.columns:
+        s = df["Close"]
+    elif isinstance(df, pd.DataFrame) and "close" in df.columns:
+        s = df["close"]
+    elif isinstance(df, pd.Series):
+        s = df
     else:
+        # fallback: последняя числовая колонка
         num = df.select_dtypes(include=[np.number])
         if num.shape[1] == 0:
             return pd.Series([], dtype="float64")
-        s = pd.to_numeric(num.iloc[:, -1], errors="coerce")
+        s = num.iloc[:, -1]
 
-    return s.ffill().astype("float64")
+    s = pd.to_numeric(s, errors="coerce").fillna(method="ffill")
+    return s.astype("float64")
 
 # ================== DATA =====================
 @st.cache_data(show_spinner=False, ttl=60)
@@ -181,7 +196,7 @@ def send_tg(name, symbol, signal, conf, exp, feats, mtf):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     arrow = "⬆️" if signal=="BUY" else "⬇️" if signal=="SELL" else "➖"
     text = (
-        f"🤖 AI FX СИГНАЛ v100.7-fix\n"
+        f"🤖 AI FX СИГНАЛ v100.7-final\n"
         f"💱 Пара: {name}\n"
         f"📌 Код для Pocket Option: `{pocket_code(name,symbol)}`\n"
         f"📈 Сигнал: {arrow} {signal}\n"
@@ -197,8 +212,8 @@ def send_tg(name, symbol, signal, conf, exp, feats, mtf):
     except: pass
 
 # ================== UI =======================
-st.set_page_config(page_title="AI FX v100.7-fix — M5+M15+M30", layout="wide")
-st.title("🤖 AI FX Signal Bot v100.7-fix — Triple-Timeframe + Pocket Copy")
+st.set_page_config(page_title="AI FX v100.7-final — M5+M15+M30", layout="wide")
+st.title("🤖 AI FX Signal Bot v100.7-final — Triple-Timeframe + Pocket Copy")
 
 thr = st.slider("Порог уверенности (Telegram)", 50, 95, CONF_THRESHOLD)
 rows=[]

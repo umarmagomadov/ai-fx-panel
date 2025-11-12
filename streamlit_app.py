@@ -24,8 +24,8 @@ if st.button("📩 Отправить тестовое сообщение в Tel
         st.error(f"Ошибка соединения: {e}")
 import streamlit as st
 
-TELEGRAM_TOKEN="8188894081:AAFgjsCbWedrB7xRZhjkdExbAYmsXTHu43k"
-CHAT_ID="6045310859"
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+CHAT_ID = st.secrets["CHAT_ID"]
 
 def send_telegram_message(pair, signal, confidence, expiry, mode):
     text = (

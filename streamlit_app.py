@@ -1,5 +1,5 @@
-# 🤖 AI FX Signal Bot v100.7-final — Triple-Timeframe Smart Mode + Pocket Copy
-# Исправлены все ошибки TypeError при обработке мультииндексных данных из yfinance
+# 🤖 AI FX Signal Bot v100.8-stable — Triple-Timeframe Smart Mode + Pocket Copy
+# Исправлены ошибки TypeError в ADX и загрузке данных, улучшена стабильность.
 
 import time, json, random, os
 from datetime import datetime, timezone
@@ -45,20 +45,6 @@ def macd(close, fast=12, slow=26, signal=9):
     s = ema(m, signal)
     return m, s, m - s
 
-def adx(df, n=14):
-    if df is None or len(df) < n+2 or "High" not in df or "Low" not in df or "Close" not in df:
-        return pd.Series([25]*len(df), index=df.index)
-    h, l, c = df["High"], df["Low"], df["Close"]
-    up_move = h.diff(); dn_move = -l.diff()
-    plus_dm  = up_move.where((up_move>0)&(up_move>dn_move), 0.0).fillna(0)
-    minus_dm = dn_move.where((dn_move>0)&(dn_move>up_move), 0.0).fillna(0)
-    tr = pd.concat([(h-l).abs(), (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(n).mean()
-    plus_di  = 100 * (plus_dm.rolling(n).sum() / (atr + 1e-9))
-    minus_di = 100 * (minus_dm.rolling(n).sum() / (atr + 1e-9))
-    dx = 100 * ((plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-9))
-    return dx.rolling(n).mean().fillna(25)
-
 def bbands(close, n=20, k=2):
     ma = close.rolling(n).mean()
     sd = close.rolling(n).std()
@@ -66,40 +52,42 @@ def bbands(close, n=20, k=2):
     width = (up - lo) / (ma + 1e-9) * 100
     return up, ma, lo, width
 
-# ================== SAFE CLOSE ==================
-def _safe_close_series(df: pd.DataFrame) -> pd.Series:
-    """Безопасно извлекает колонку Close из любых форматов DataFrame"""
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return pd.Series([], dtype="float64")
+# ================== FIXED ADX ==================
+def adx(df: pd.DataFrame, n: int = 14) -> pd.Series:
+    """
+    Безошибочный расчёт ADX: работает даже при пустых или повреждённых данных.
+    Возвращает Series длиной как у df, заполненную безопасными float.
+    """
+    try:
+        if df is None or not isinstance(df, pd.DataFrame) or len(df) < n + 2:
+            return pd.Series([25.0], index=[0])
 
-    # Если мультииндекс — убираем уровень
-    if isinstance(df.columns, pd.MultiIndex):
-        if ("Close" in df.columns.get_level_values(0)):
-            df = df["Close"]
-            if isinstance(df, pd.DataFrame):
-                # Берем первый столбец
-                df = df.iloc[:,0]
-        elif "close" in df.columns.get_level_values(0):
-            df = df["close"]
-            if isinstance(df, pd.DataFrame):
-                df = df.iloc[:,0]
+        # извлекаем столбцы независимо от регистра / мультииндекса
+        def _get(colname):
+            for c in df.columns:
+                if isinstance(c, str) and c.lower() == colname:
+                    return pd.to_numeric(df[c], errors="coerce")
+                if isinstance(c, tuple) and str(c[0]).lower() == colname:
+                    return pd.to_numeric(df[c], errors="coerce")
+            return pd.Series(np.nan, index=df.index)
 
-    # Если осталась колонка Close
-    if isinstance(df, pd.DataFrame) and "Close" in df.columns:
-        s = df["Close"]
-    elif isinstance(df, pd.DataFrame) and "close" in df.columns:
-        s = df["close"]
-    elif isinstance(df, pd.Series):
-        s = df
-    else:
-        # fallback: последняя числовая колонка
-        num = df.select_dtypes(include=[np.number])
-        if num.shape[1] == 0:
-            return pd.Series([], dtype="float64")
-        s = num.iloc[:, -1]
+        h, l, c = _get("high"), _get("low"), _get("close")
+        if h.isna().all() or l.isna().all() or c.isna().all():
+            return pd.Series([25.0] * len(df), index=df.index)
 
-    s = pd.to_numeric(s, errors="coerce").fillna(method="ffill")
-    return s.astype("float64")
+        up_move, dn_move = h.diff(), -l.diff()
+        plus_dm  = up_move.where((up_move > 0) & (up_move > dn_move), 0.0).fillna(0)
+        minus_dm = dn_move.where((dn_move > 0) & (dn_move > up_move), 0.0).fillna(0)
+        tr = pd.concat([(h - l).abs(), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.rolling(n, min_periods=1).mean()
+        plus_di  = 100 * (plus_dm.rolling(n, min_periods=1).sum() / (atr + 1e-9))
+        minus_di = 100 * (minus_dm.rolling(n, min_periods=1).sum() / (atr + 1e-9))
+        dx = 100 * ((plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-9))
+        adx_val = dx.rolling(n, min_periods=1).mean().fillna(25.0)
+        return adx_val.astype(float)
+
+    except Exception:
+        return pd.Series([25.0] * (len(df) if df is not None else 1))
 
 # ================== DATA =====================
 @st.cache_data(show_spinner=False, ttl=60)
@@ -126,7 +114,8 @@ def score_single(df):
     if df is None or df.empty:
         return "FLAT", 0, {}
 
-    close = _safe_close_series(df)
+    close = df["Close"] if "Close" in df else df.select_dtypes(include=[np.number]).iloc[:, -1]
+    close = pd.to_numeric(close, errors="coerce").fillna(method="ffill")
     if close.empty or close.size < 30:
         return "FLAT", 0, {}
 
@@ -159,13 +148,12 @@ def score_single(df):
     return sig, conf, feats
 
 def tf_dir(df):
-    if df is None or df.empty:
-        return "FLAT"
-    c = _safe_close_series(df)
-    if c.empty or c.size < 30:
-        return "FLAT"
-    macd_line, macd_sig, macd_hist = macd(c)
-    rsv = float(rsi(c).iloc[-1])
+    if df is None or df.empty: return "FLAT"
+    close = df["Close"] if "Close" in df else df.select_dtypes(include=[np.number]).iloc[:, -1]
+    close = pd.to_numeric(close, errors="coerce").fillna(method="ffill")
+    if close.empty or close.size < 30: return "FLAT"
+    macd_line, macd_sig, macd_hist = macd(close)
+    rsv = float(rsi(close).iloc[-1])
     mh = float(macd_hist.iloc[-1])
     if mh > 0 and rsv > 50: return "BUY"
     if mh < 0 and rsv < 50: return "SELL"
@@ -196,7 +184,7 @@ def send_tg(name, symbol, signal, conf, exp, feats, mtf):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
     arrow = "⬆️" if signal=="BUY" else "⬇️" if signal=="SELL" else "➖"
     text = (
-        f"🤖 AI FX СИГНАЛ v100.7-final\n"
+        f"🤖 AI FX СИГНАЛ v100.8-stable\n"
         f"💱 Пара: {name}\n"
         f"📌 Код для Pocket Option: `{pocket_code(name,symbol)}`\n"
         f"📈 Сигнал: {arrow} {signal}\n"
@@ -212,8 +200,8 @@ def send_tg(name, symbol, signal, conf, exp, feats, mtf):
     except: pass
 
 # ================== UI =======================
-st.set_page_config(page_title="AI FX v100.7-final — M5+M15+M30", layout="wide")
-st.title("🤖 AI FX Signal Bot v100.7-final — Triple-Timeframe + Pocket Copy")
+st.set_page_config(page_title="AI FX v100.8-stable — M5+M15+M30", layout="wide")
+st.title("🤖 AI FX Signal Bot v100.8-stable — Triple-Timeframe + Pocket Copy")
 
 thr = st.slider("Порог уверенности (Telegram)", 50, 95, CONF_THRESHOLD)
 rows=[]

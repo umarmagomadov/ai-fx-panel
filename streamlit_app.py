@@ -9,7 +9,6 @@ TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = st.secrets["CHAT_ID"]
 
 st.title("AI FX Panel")
-    try:
         test_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         test_data = {
             "chat_id": CHAT_ID,

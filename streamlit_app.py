@@ -1,9 +1,13 @@
-# AI FX PANEL PRO — 24/7 сигналы (Forex + Commodities + Crypto), автоэкспирация 1–9 мин
+# AI FX PANEL PRO — 24/7 сигналы (Forex + Commodities + Crypto), автоэкспирация 1–30 мин
 
 import time, json, math, random
-import requests, numpy as np, pandas as pd, yfinance as yf
-import streamlit as st
 from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+import requests
+import streamlit as st
+import yfinance as yf
 import plotly.graph_objects as go
 
 # --------- СЕКРЕТЫ (Streamlit Secrets) ---------
@@ -12,7 +16,7 @@ CHAT_ID        = st.secrets["CHAT_ID"]
 
 # --------- НАСТРОЙКИ ---------
 REFRESH_SEC     = 1            # обновление интерфейса, сек
-LOOKBACK_MIN    = 180          # история для расчётов
+LOOKBACK_MIN    = 180          # история для расчётов, мин
 INTERVAL        = "1m"         # таймфрейм
 SEND_THRESHOLD  = 70           # порог уверенности для отправки в TG
 ONLY_NEW        = True         # антиспам: не слать одинаковое хуже/чаще
@@ -33,7 +37,8 @@ PAIRS = {
 }
 
 # --------- ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ ---------
-def ema(s, n): return s.ewm(span=n, adjust=False).mean()
+def ema(s, n): 
+    return s.ewm(span=n, adjust=False).mean()
 
 def rsi(close, period=14):
     d = close.diff()
@@ -85,7 +90,6 @@ def nudge_last(df, max_bps=5):
     close = float(last["Close"])
     bps = random.uniform(-max_bps, max_bps) / 10000.0  # ±N б.п.
     new_close = max(1e-9, close * (1 + bps))
-    # делаем узкую свечу вокруг предыдущей цены
     last["Open"]  = close
     last["High"]  = max(close, new_close)
     last["Low"]   = min(close, new_close)
@@ -94,101 +98,101 @@ def nudge_last(df, max_bps=5):
     return last
 
 def get_or_fake(symbol):
-    """Реальные данные, иначе — кэш + синтетический тик, иначе — маленькая синтетика с нуля."""
-    if "cache" not in st.session_state: st.session_state.cache = {}
-    real = safe_download(symbol)
-    if real is not None:
-        st.session_state.cache[symbol] = real.copy()
-        return real
-    # нет новых — используем кэш и «подвигаем» один бар, чтобы индикаторы считались
-    cached = st.session_state.cache.get(symbol)
-    if cached is not None and len(cached) > 0:
-        import pandas as pd  # если вверху файла нет — добавь один раз
-
-def get_or_fake(symbol):
-    """Реальные данные, иначе — кэш + синтетика"""
+    """Реальные данные → кэш; иначе подвигаем последний бар; иначе делаем синтетику."""
     if "cache" not in st.session_state:
         st.session_state.cache = {}
 
     real = safe_download(symbol)
     if real is not None:
-        st.session_state.cache[symbol] = real
+        st.session_state.cache[symbol] = real.copy()
         return real
 
-    # нет новых — используем кэш и «подвинуем» последнюю свечу
     cached = st.session_state.cache.get(symbol)
     if cached is not None and len(cached) > 0:
-        import pandas as pd
         df = cached.copy()
         last = nudge_last(df)
-
+        # если вернулся Series — превращаем в DataFrame с индексом-временем
         if isinstance(last, pd.Series):
             last = last.to_frame().T
-
-        df = pd.concat([df, last], ignore_index=False)
+        df = pd.concat([df, last], axis=0)
         st.session_state.cache[symbol] = df.tail(600)
         return st.session_state.cache[symbol]
 
-    # совсем пусто — создаём синтетические данные
+    # Совсем пусто — создаём небольшую синтетику
     idx = pd.date_range(end=datetime.utcnow(), periods=60, freq="1min")
     base = 1.0 + random.random() / 10
     vals = base * (1 + np.cumsum(np.random.randn(60)) / 100)
     df = pd.DataFrame({"Open": vals, "High": vals, "Low": vals, "Close": vals}, index=idx)
     st.session_state.cache[symbol] = df
     return df
+
+# --------- ЛОГИКА СИГНАЛА/УВЕРЕННОСТИ ---------
+def calculate_confidence(rsi_v: float, adx_v: float, macd_hist_v: float) -> int:
+    """
+    Чем сильнее тренд (ADX) и чем дальше RSI от 50, + подтверждение MACD — тем выше уверенность.
+    Возвращаем 40..100.
+    """
+    score = 0
+    score += min(abs(rsi_v - 50) * 1.2, 40)           # до 40
+    score += min(adx_v, 40)                           # до 40
+    score += min(abs(macd_hist_v) * 100000, 20)       # до 20
+    return int(max(40, min(100, round(score))))
+
+def score_and_signal(df):
+    """Возвращает (signal: BUY/SELL/FLAT, confidence:int, feats:dict)."""
     close = df["Close"]
-    rsi_v = float(rsi(close).iloc[-1])
-    ema9  = float(ema(close, 9).iloc[-1])
-    ema21 = float(ema(close, 21).iloc[-1])
+
+    rsi_v  = float(rsi(close).iloc[-1])
+    ema9   = float(ema(close, 9).iloc[-1])
+    ema21  = float(ema(close, 21).iloc[-1])
     macd_line, macd_sig, macd_hist = macd(close)
     m_hist = float(macd_hist.iloc[-1])
+
     up, mid, lo, width = bbands(close)
     bb_pos = float((close.iloc[-1] - mid.iloc[-1]) / (up.iloc[-1] - lo.iloc[-1] + 1e-9))
-    adx_v = float(adx(df).iloc[-1])
+    adx_v  = float(adx(df).iloc[-1])
 
+    # простое голосование
     votes_buy = votes_sell = 0
-    # RSI
     if rsi_v < 30: votes_buy += 1
     if rsi_v > 70: votes_sell += 1
-    # EMA тренд
     if ema9 > ema21: votes_buy += 1
     if ema9 < ema21: votes_sell += 1
-    # MACD
     if m_hist > 0: votes_buy += 1
     if m_hist < 0: votes_sell += 1
-    # Боллинджер (отскок от крайностей)
     if bb_pos < -0.25: votes_buy += 1
     if bb_pos >  0.25: votes_sell += 1
 
-    trend_boost = min(max((adx_v - 18) / 25, 0), 1)   # 0..1 при ADX ~18..43+
-
     if votes_buy == votes_sell:
-        direction = "FLAT"
+        signal = "FLAT"
     elif votes_buy > votes_sell:
-        direction = "BUY"
+        signal = "BUY"
     else:
-        direction = "SELL"
+        signal = "SELL"
 
-    raw = abs(votes_buy - votes_sell) / 4.0
-    confidence = int(100 * (0.55*raw + 0.45*trend_boost))
-    confidence = max(0, min(99, confidence))
+    confidence = calculate_confidence(rsi_v, adx_v, m_hist)
 
-    feats = dict(RSI=round(rsi_v,1), ADX=round(adx_v,1), MACD_Hist=round(m_hist,5),
-                 EMA9_minus_EMA21=round(ema9-ema21,5), BB_Pos=round(bb_pos,3),
-                 BB_Width=round(float(width.iloc[-1]),2))
-    return direction, confidence, feats
-def choose_expiry(confidence, adx_value, rsi_value):
+    feats = dict(
+        RSI=round(rsi_v, 1),
+        ADX=round(adx_v, 1),
+        MACD_Hist=round(m_hist, 5),
+        EMA9_minus_EMA21=round(ema9 - ema21, 5),
+        BB_Pos=round(bb_pos, 3),
+        BB_Width=round(float(width.iloc[-1]), 2),
+    )
+    return signal, confidence, feats
+
+def choose_expiry(confidence: int, adx_value: float, rsi_value: float) -> int | None:
     """
     Возвращает оптимальное время экспирации (в минутах)
     на основе уверенности сигнала и силы тренда.
     """
-
-    # --- ФИЛЬТР УВЕРЕННОСТИ ---
+    # Фильтр слабых
     if confidence < 60:
         print(f"⚠️ Пропущен слабый сигнал (уверенность {confidence}%)")
-        return None  # слабый сигнал — не открываем сделку
+        return None
 
-    # --- УМНЫЙ ВЫБОР ВРЕМЕНИ ЭКСПИРАЦИИ ---
+    # База по уверенности
     if confidence < 65:
         base = 2
     elif confidence < 75:
@@ -202,72 +206,33 @@ def choose_expiry(confidence, adx_value, rsi_value):
     else:
         base = 25
 
-    # Корректировка по силе тренда (ADX)
+    # Корректировка по силе тренда
     if adx_value >= 50:
-        base += 10  # очень сильный тренд → даём больше времени
+        base += 10
     elif adx_value >= 30:
-        base += 5   # средний тренд
+        base += 5
     elif adx_value < 20:
-        base = max(2, base - 3)  # слабый тренд → уменьшаем
+        base = max(2, base - 3)
 
-    # Ограничиваем диапазон
-    expiry = int(max(1, min(30, base)))
-    return expiry
+    return int(max(1, min(30, base)))
 
-
-# --- РАСЧЁТ УВЕРЕННОСТИ СИГНАЛА ---
-def calculate_confidence(rsi, adx, macd):
-    """
-    Уверенность вычисляется по качеству сигнала.
-    Чем сильнее тренд и чем дальше RSI от 50, тем выше уверенность.
-    """
-    score = 0
-
-    # RSI — чем дальше от 50, тем сильнее сигнал
-    score += min(abs(rsi - 50) * 1.2, 40)
-
-    # ADX — сила тренда
-    score += min(adx, 40)
-
-    # MACD — подтверждение направления
-    score += min(abs(macd) * 100000, 20)
-
-    # Ограничиваем диапазон
-    confidence = max(40, min(100, round(score)))
-    return confidence
-def calculate_confidence(rsi, adx, macd):
-    """
-    Уверенность вычисляется по качеству сигнала.
-    Чем сильнее тренд и чем дальше RSI от 50, тем выше уверенность.
-    """
-    score = 0
-
-    # RSI — чем дальше от 50, тем сильнее сигнал
-    score += min(abs(rsi - 50) * 1.2, 40)
-
-    # ADX — сила тренда
-    score += min(adx, 40)
-
-    # MACD — подтверждение направления
-    score += min(abs(macd) * 100000, 20)
-
-    # Ограничиваем диапазон
-    confidence = max(40, min(100, round(score)))
-
-    # Временная пара для теста (можно заменить на реальную переменную)
-    pair = "TEST/USD"
+def send_telegram(pair_name: str, signal: str, confidence: int, expiry: int | None, feats: dict):
+    """Отправка сообщения в Telegram."""
+    if expiry is None:
+        exp_txt = "—"
+    else:
+        exp_txt = f"{expiry} мин"
 
     text = (
         f"🤖 *AI FX СИГНАЛ*\n"
-        f"💵 Пара: {pair}\n"
+        f"💵 Пара: {pair_name}\n"
         f"📊 Сигнал: {signal}\n"
         f"💪 Уверенность: {confidence}%\n"
-        f"⏱ Экспирация: {expiry} мин\n"
-        f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']}\n"
-        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')}\n"
+        f"⏱ Экспирация: {exp_txt}\n"
+        f"⚙️ RSI {feats.get('RSI','?')} | ADX {feats.get('ADX','?')} | MACD {feats.get('MACD_Hist','?')}\n"
+        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')}"
     )
-
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
     except Exception as e:
@@ -295,15 +260,16 @@ rows = []
 # --------- АНАЛИЗ ВСЕХ ИНСТРУМЕНТОВ ---------
 for name, symbol in PAIRS.items():
     df = get_or_fake(symbol)
+    if df is None or len(df) < 30:
+        continue
 
-    # индикаторы и сигнал
     sig, conf, feats = score_and_signal(df)
-    expiry = choose_expiry(confidence, feats['ADX'], feats['RSI'])
+    expiry = choose_expiry(conf, feats["ADX"], feats["RSI"])
 
-    rows.append([name, sig, conf, expiry, json.dumps(feats)])
+    rows.append([name, sig, conf, expiry if expiry is not None else "-", json.dumps(feats)])
 
     # отправка только уверенных
-    if sig in ("BUY","SELL") and conf >= threshold:
+    if sig in ("BUY", "SELL") and conf >= threshold:
         prev = st.session_state.last_sent.get(name, {})
         should = True
         if ONLY_NEW and prev:
@@ -318,7 +284,8 @@ for name, symbol in PAIRS.items():
 
 # --------- ТАБЛИЦА ---------
 df_show = pd.DataFrame(rows, columns=["Пара","Сигнал","Уверенность","Экспирация (мин)","Индикаторы"])
-df_show = df_show.sort_values("Уверенность", ascending=False).reset_index(drop=True)
+if len(df_show):
+    df_show = df_show.sort_values("Уверенность", ascending=False).reset_index(drop=True)
 st.subheader("📋 Рейтинг сигналов")
 st.dataframe(df_show, use_container_width=True, height=440)
 
@@ -327,10 +294,10 @@ if len(df_show):
     top = df_show.iloc[0]
     sym = PAIRS[top["Пара"]]
     dfc = get_or_fake(sym)
-    if dfc is not None:
+    if dfc is not None and len(dfc):
         fig = go.Figure(data=[go.Candlestick(x=dfc.index, open=dfc["Open"], high=dfc["High"],
                                              low=dfc["Low"], close=dfc["Close"])])
-        fig.update_layout(height=380, margin=dict(l=0,r=0,t=20,b=0),
+        fig.update_layout(height=380, margin=dict(l=0, r=0, t=20, b=0),
                           title=f"Топ: {top['Пара']} — {top['Сигнал']} ({top['Уверенность']}%)")
         st.plotly_chart(fig, use_container_width=True)
 

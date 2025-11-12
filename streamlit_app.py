@@ -201,7 +201,28 @@ def score_single(df: pd.DataFrame) -> tuple[str,int,dict]:
     ema9 = float(ema(close,9).iloc[-1]); ema21 = float(ema(close,21).iloc[-1]); ema200 = float(ema(close,200).iloc[-1])
     _,_,mh = macd(close); mhv = float(mh.iloc[-1])
     up,mid,lo,w = bbands(close); bb_pos = float((close.iloc[-1]-mid.iloc[-1])/(up.iloc[-1]-lo.iloc[-1]+1e-9))
-    adx_v = float(adx(df).iloc[-1])
+    # --- Safe ADX, RSI, MACD расчёт ---
+try:
+    adx_series = adx(df)
+    adx_v = adx_series.iloc[-1]
+    if pd.isna(adx_v):
+        adx_v = float(adx_series.dropna().iloc[-1]) if adx_series.dropna().shape[0] else 25.0
+    adx_v = float(adx_v)
+except Exception:
+    adx_v = 25.0
+
+try:
+    rsv_series = rsi(df["Close"])
+    rsv = float(rsv_series.iloc[-1])
+    rsv_prev = float(rsv_series.iloc[-2]) if len(rsv_series) > 2 else rsv
+except Exception:
+    rsv, rsv_prev = 50.0, 50.0
+
+try:
+    macd_line, macd_sig, macd_hist = macd(df["Close"])
+    mhv = float(macd_hist.iloc[-1])
+except Exception:
+    mhv = 0.0
 
     # голоса
     vu=vd=0

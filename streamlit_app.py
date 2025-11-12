@@ -232,9 +232,8 @@ def calculate_confidence(rsi, adx, macd):
     # MACD — подтверждение направления
     score += min(abs(macd) * 100000, 20)
 
-    # Ограничиваем диапазон
-    confidence = max(40, min(100, round(score)))
-
+    # Ограничиваем диапазон  
+confidence = max(40, min(100, round(score)))
 text = (
     f"🤖 *AI FX СИГНАЛ*\n"
     f"💲 Пара: {pair}\n"

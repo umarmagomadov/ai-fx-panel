@@ -234,16 +234,16 @@ def calculate_confidence(rsi, adx, macd):
 
     # Ограничиваем диапазон
     confidence = max(40, min(100, round(score)))
-    return confidence(pair, signal, confidence, expiry, feats):
-    text = (
-        f"🤖 *AI FX СИГНАЛ*\n"
-        f"💲 Пара: {pair}\n"
-        f"📊 Сигнал: {signal}\n"
-        f"💪 Уверенность: {confidence}%\n"
-        f"⏱ Экспирация: {expiry} мин\n"
-        f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD_Hist']}\n"
-        f"⏰ {datetime.utcnow().strftime('%H:%M:%S UTC')}"
-    )
+
+text = (
+    f"🤖 *AI FX СИГНАЛ*\n"
+    f"💲 Пара: {pair}\n"
+    f"📊 Сигнал: {signal}\n"
+    f"💪 Уверенность: {confidence}%\n"
+    f"⏱ Экспирация: {expiry} мин\n"
+    f"⚙️ RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD']}\n"
+    f"⏰ {datetime.utcnow().strftime('%H:%M:%S UTC')}"
+)
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode":"Markdown"}, timeout=10)

@@ -279,7 +279,7 @@ for name, symbol in PAIRS.items():
 
     # индикаторы и сигнал
     sig, conf, feats = score_and_signal(df)
-    expiry = choose_expiry(conf, feats["ADX"])
+    expiry = choose_expiry(confidence, feats['ADX'], feats['RSI'])
 
     rows.append([name, sig, conf, expiry, json.dumps(feats)])
 

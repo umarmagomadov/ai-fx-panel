@@ -158,52 +158,43 @@ def score_and_signal(df):
                  EMA9_minus_EMA21=round(ema9-ema21,5), BB_Pos=round(bb_pos,3),
                  BB_Width=round(float(width.iloc[-1]),2))
     return direction, confidence, feats
-
 def choose_expiry(confidence, adx_value, rsi_value):
     """
     Возвращает оптимальное время экспирации (в минутах)
-    на основе уверенности сигнала и силы тренда (ADX).
+    на основе уверенности сигнала и силы тренда.
     """
-    # базовое время по уверенности
+
     # --- ФИЛЬТР УВЕРЕННОСТИ ---
-if confidence < 60:
     if confidence < 60:
-    print(f"⚠️ Пропущен слабый сигнал (уверенность {confidence}%)")
-    return None  # слабый сигнал — не открываем сделку
+        print(f"⚠️ Пропущен слабый сигнал (уверенность {confidence}%)")
+        return None  # слабый сигнал — не открываем сделку
 
-# Базовое время по уверенности сигнала
-if confidence < 65:
-    base = 2
-elif confidence < 75:
-    base = 5
-elif confidence < 85:
-    base = 8
-elif confidence < 90:
-    base = 12
-elif confidence < 95:
-    base = 18
-else:
-    base = 25
+    # --- УМНЫЙ ВЫБОР ВРЕМЕНИ ЭКСПИРАЦИИ ---
+    if confidence < 65:
+        base = 2
+    elif confidence < 75:
+        base = 5
+    elif confidence < 85:
+        base = 8
+    elif confidence < 90:
+        base = 12
+    elif confidence < 95:
+        base = 18
+    else:
+        base = 25
 
-# Корректировка по силе тренда (ADX)
-if adx_value >= 50:
-    base += 10  # очень сильный тренд → даём больше времени
-elif adx_value >= 30:
-    base += 5   # средний тренд
-elif adx_value < 20:
-    base = max(2, base - 3)  # слабый тренд → уменьшаем
+    # Корректировка по силе тренда (ADX)
+    if adx_value >= 50:
+        base += 10  # очень сильный тренд → даём больше времени
+    elif adx_value >= 30:
+        base += 5   # средний тренд
+    elif adx_value < 20:
+        base = max(2, base - 3)  # слабый тренд → уменьшаем
 
-# Корректировка по волатильности (на основе RSI)
-if 40 < rsi_value < 60:
-    base = max(2, base - 2)  # флет → сокращаем время
-elif rsi_value < 30 or rsi_value > 70:
-    base += 5  # зона перекупленности/перепроданности → больше времени
-
-# Ограничиваем диапазон (чтобы не уходил в экстремальные значения)
-expiry = int(max(1, min(45, base)))
-
-return expiry
+    # Ограничиваем диапазон
+    expiry = int(max(1, min(30, base)))
     return expiry
+
 
 # --- РАСЧЁТ УВЕРЕННОСТИ СИГНАЛА ---
 def calculate_confidence(rsi, adx, macd):

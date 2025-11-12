@@ -1,5 +1,5 @@
- Signal Bot v100.8-stable — Triple-Timeframe Smart Mode + Pocket Copy
-# Исправлены ошибки TypeError в ADX и загрузке данных, улучшена стабильность.
+# 🤖 AI FX Signal Bot v100.9-safe — Triple-Timeframe Smart Mode + Pocket Copy
+# Исправлены все ошибки с pd.to_numeric / ADX / мультииндексами
 
 import time, json, random, os
 from datetime import datetime, timezone
@@ -10,16 +10,15 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 
-# ================== SECRETS ==================
+# ========== TELEGRAM SECRETS ==========
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", os.getenv("TELEGRAM_TOKEN", ""))
 CHAT_ID        = st.secrets.get("CHAT_ID",        os.getenv("CHAT_ID", ""))
 
-# ================== SETTINGS =================
+# ========== SETTINGS ==========
 REFRESH_SEC     = 1
 ONLY_NEW        = True
 MIN_SEND_GAP_S  = 60
 CONF_THRESHOLD  = 70
-
 TF_MAIN  = ("5m",  "2d")
 TF_MID   = ("15m", "5d")
 TF_TREND = ("30m", "10d")
@@ -30,7 +29,7 @@ PAIRS = {
     "WTI Crude Oil OTC":"WTI-OTC","GBP/USD OTC":"GBPUSD-OTC"
 }
 
-# ================== INDICATORS ===============
+# ========== INDICATORS ==========
 def ema(s, n): return s.ewm(span=n, adjust=False).mean()
 
 def rsi(close, period=14):
@@ -52,29 +51,21 @@ def bbands(close, n=20, k=2):
     width = (up - lo) / (ma + 1e-9) * 100
     return up, ma, lo, width
 
-# ================== FIXED ADX ==================
+# ========== ADX FIX ==========
 def adx(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    """
-    Безошибочный расчёт ADX: работает даже при пустых или повреждённых данных.
-    Возвращает Series длиной как у df, заполненную безопасными float.
-    """
     try:
         if df is None or not isinstance(df, pd.DataFrame) or len(df) < n + 2:
             return pd.Series([25.0], index=[0])
-
-        # извлекаем столбцы независимо от регистра / мультииндекса
-        def _get(colname):
+        def _get(col):
             for c in df.columns:
-                if isinstance(c, str) and c.lower() == colname:
+                if isinstance(c, str) and c.lower() == col:
                     return pd.to_numeric(df[c], errors="coerce")
-                if isinstance(c, tuple) and str(c[0]).lower() == colname:
+                if isinstance(c, tuple) and str(c[0]).lower() == col:
                     return pd.to_numeric(df[c], errors="coerce")
             return pd.Series(np.nan, index=df.index)
-
         h, l, c = _get("high"), _get("low"), _get("close")
         if h.isna().all() or l.isna().all() or c.isna().all():
             return pd.Series([25.0] * len(df), index=df.index)
-
         up_move, dn_move = h.diff(), -l.diff()
         plus_dm  = up_move.where((up_move > 0) & (up_move > dn_move), 0.0).fillna(0)
         minus_dm = dn_move.where((dn_move > 0) & (dn_move > up_move), 0.0).fillna(0)
@@ -85,21 +76,32 @@ def adx(df: pd.DataFrame, n: int = 14) -> pd.Series:
         dx = 100 * ((plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-9))
         adx_val = dx.rolling(n, min_periods=1).mean().fillna(25.0)
         return adx_val.astype(float)
-
     except Exception:
         return pd.Series([25.0] * (len(df) if df is not None else 1))
 
-# ================== DATA =====================
+# ========== SAFE DATA ==========
 @st.cache_data(show_spinner=False, ttl=60)
 def load_data(symbol, period, interval):
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=True)
-        if df is None or df.empty or len(df) < 50:
+        if df is None or df.empty:
             return pd.DataFrame()
-        return df.tail(600)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] for c in df.columns]
+        for col in ["Open","High","Low","Close"]:
+            if col not in df.columns: df[col] = np.nan
+        return df.tail(600).dropna(how="all")
     except Exception:
         return pd.DataFrame()
 
+def safe_close(df):
+    if "Close" in df.columns:
+        x = df["Close"]
+        if isinstance(x, pd.DataFrame): x = x.iloc[:, 0]
+        return pd.to_numeric(x, errors="coerce").fillna(method="ffill")
+    return pd.Series(np.nan, index=range(50))
+
+# ========== UTILS ==========
 def is_otc(name): return "OTC" in name.upper()
 
 def pocket_code(name, symbol):
@@ -109,16 +111,11 @@ def pocket_code(name, symbol):
     if symbol == "BZ=F": return "BRENT/USD"
     return name.upper().replace(" ","_")
 
-# ================== СИГНАЛЫ ==================
+# ========== CORE ==========
 def score_single(df):
-    if df is None or df.empty:
-        return "FLAT", 0, {}
-
-    close = df["Close"] if "Close" in df else df.select_dtypes(include=[np.number]).iloc[:, -1]
-    close = pd.to_numeric(close, errors="coerce").fillna(method="ffill")
-    if close.empty or close.size < 30:
-        return "FLAT", 0, {}
-
+    if df is None or df.empty: return "FLAT", 0, {}
+    close = safe_close(df)
+    if close.isna().all(): return "FLAT", 0, {}
     rsv = float(rsi(close).iloc[-1])
     ema9, ema21 = float(ema(close,9).iloc[-1]), float(ema(close,21).iloc[-1])
     macd_line, macd_sig, macd_hist = macd(close)
@@ -126,112 +123,99 @@ def score_single(df):
     up, mid, lo, width = bbands(close)
     bb_pos = float((close.iloc[-1]-mid.iloc[-1])/((up.iloc[-1]-lo.iloc[-1])+1e-9))
     adx_v = float(adx(df).iloc[-1])
-
-    votes_buy = votes_sell = 0
-    if rsv < 35: votes_buy+=1
-    if rsv > 65: votes_sell+=1
-    if ema9 > ema21: votes_buy+=1
-    if ema9 < ema21: votes_sell+=1
-    if m_hist > 0: votes_buy+=1
-    if m_hist < 0: votes_sell+=1
-    if bb_pos < -0.25: votes_buy+=1
-    if bb_pos >  0.25: votes_sell+=1
-
-    if votes_buy == votes_sell: sig = "FLAT"
-    elif votes_buy > votes_sell: sig = "BUY"
-    else: sig = "SELL"
-
-    trend_boost = min(max((adx_v - 18)/25,0),1)
-    raw = abs(votes_buy - votes_sell)/4.0
-    conf = int(100*(0.55*raw + 0.45*trend_boost))
-    feats = {"RSI":round(rsv,1),"ADX":round(adx_v,1),"MACD":round(m_hist,5)}
-    return sig, conf, feats
+    buy=sell=0
+    if rsv<35:buy+=1
+    if rsv>65:sell+=1
+    if ema9>ema21:buy+=1
+    if ema9<ema21:sell+=1
+    if m_hist>0:buy+=1
+    if m_hist<0:sell+=1
+    if bb_pos<-0.25:buy+=1
+    if bb_pos>0.25:sell+=1
+    if buy==sell:sig="FLAT"
+    elif buy>sell:sig="BUY"
+    else:sig="SELL"
+    trend_boost=min(max((adx_v-18)/25,0),1)
+    raw=abs(buy-sell)/4.0
+    conf=int(100*(0.55*raw+0.45*trend_boost))
+    feats={"RSI":round(rsv,1),"ADX":round(adx_v,1),"MACD":round(m_hist,5)}
+    return sig,conf,feats
 
 def tf_dir(df):
-    if df is None or df.empty: return "FLAT"
-    close = df["Close"] if "Close" in df else df.select_dtypes(include=[np.number]).iloc[:, -1]
-    close = pd.to_numeric(close, errors="coerce").fillna(method="ffill")
-    if close.empty or close.size < 30: return "FLAT"
-    macd_line, macd_sig, macd_hist = macd(close)
-    rsv = float(rsi(close).iloc[-1])
-    mh = float(macd_hist.iloc[-1])
-    if mh > 0 and rsv > 50: return "BUY"
-    if mh < 0 and rsv < 50: return "SELL"
-    return "FLAT"
+    if df is None or df.empty:return"FLAT"
+    close=safe_close(df)
+    macd_line,macd_sig,macd_hist=macd(close)
+    rsv=float(rsi(close).iloc[-1])
+    mh=float(macd_hist.iloc[-1])
+    if mh>0 and rsv>50:return"BUY"
+    if mh<0 and rsv<50:return"SELL"
+    return"FLAT"
 
 def score_multi(symbol):
-    df5  = load_data(symbol, TF_MAIN[1],  TF_MAIN[0])
-    df15 = load_data(symbol, TF_MID[1],   TF_MID[0])
-    df30 = load_data(symbol, TF_TREND[1], TF_TREND[0])
-    s5,c5,f5 = score_single(df5)
-    d5,d15,d30 = tf_dir(df5), tf_dir(df15), tf_dir(df30)
-    conf = c5
-    if d5==d15==d30 and d5!="FLAT": conf+=15
-    elif (d5==d15) or (d5==d30): conf+=7
-    else: conf-=10
-    conf = max(0,min(100,conf))
-    return s5, conf, f5, {"M5":d5,"M15":d15,"M30":d30}
+    df5=load_data(symbol,TF_MAIN[1],TF_MAIN[0])
+    df15=load_data(symbol,TF_MID[1],TF_MID[0])
+    df30=load_data(symbol,TF_TREND[1],TF_TREND[0])
+    s5,c5,f5=score_single(df5)
+    d5,d15,d30=tf_dir(df5),tf_dir(df15),tf_dir(df30)
+    conf=c5
+    if d5==d15==d30 and d5!="FLAT":conf+=15
+    elif (d5==d15)or(d5==d30):conf+=7
+    else:conf-=10
+    conf=max(0,min(100,conf))
+    return s5,conf,f5,{"M5":d5,"M15":d15,"M30":d30}
 
-def expiry(conf, adx):
-    if conf<60: return 5
-    if conf<70: return 8
-    if conf<80: return 12
-    if conf<90: return 20
-    return 30
+def expiry(conf,adx):
+    if conf<60:return5
+    if conf<70:return8
+    if conf<80:return12
+    if conf<90:return20
+    return30
 
-# ================== TELEGRAM =================
-def send_tg(name, symbol, signal, conf, exp, feats, mtf):
-    if not TELEGRAM_TOKEN or not CHAT_ID: return
-    arrow = "⬆️" if signal=="BUY" else "⬇️" if signal=="SELL" else "➖"
-    text = (
-        f"🤖 AI FX СИГНАЛ v100.8-stable\n"
-        f"💱 Пара: {name}\n"
-        f"📌 Код для Pocket Option: `{pocket_code(name,symbol)}`\n"
-        f"📈 Сигнал: {arrow} {signal}\n"
-        f"💪 Уверенность: {conf}%\n"
-        f"⏱ Экспирация: {exp} мин\n"
-        f"📊 RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD']}\n"
-        f"🕒 Multi-TF: M5={mtf['M5']} | M15={mtf['M15']} | M30={mtf['M30']}\n"
-        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')} UTC"
-    )
+# ========== TELEGRAM ==========
+def send_tg(name,symbol,signal,conf,exp,feats,mtf):
+    if not TELEGRAM_TOKEN or not CHAT_ID:return
+    arrow="⬆️"if signal=="BUY"else"⬇️"if signal=="SELL"else"➖"
+    text=(f"🤖 AI FX СИГНАЛ v100.9-safe\n"
+          f"💱 Пара: {name}\n"
+          f"📌 Pocket: `{pocket_code(name,symbol)}`\n"
+          f"{arrow} *{signal}* | Уверенность: {conf}% | Эксп: {exp}мин\n"
+          f"RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD']}\n"
+          f"TF: M5={mtf['M5']} M15={mtf['M15']} M30={mtf['M30']}\n"
+          f"⏰ {datetime.utcnow().strftime('%H:%M:%S')} UTC")
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                       data={"chat_id":CHAT_ID,"text":text,"parse_mode":"Markdown"})
-    except: pass
+    except:pass
 
-# ================== UI =======================
-st.set_page_config(page_title="AI FX v100.8-stable — M5+M15+M30", layout="wide")
-st.title("🤖 AI FX Signal Bot v100.8-stable — Triple-Timeframe + Pocket Copy")
+# ========== UI ==========
+st.set_page_config(page_title="AI FX v100.9-safe",layout="wide")
+st.title("🤖 AI FX Signal Bot v100.9-safe — M5+M15+M30")
 
-thr = st.slider("Порог уверенности (Telegram)", 50, 95, CONF_THRESHOLD)
+thr=st.slider("Порог уверенности (Telegram)",50,95,CONF_THRESHOLD)
 rows=[]
-
-if "sent" not in st.session_state: st.session_state.sent={}
+if"sent"not in st.session_state:st.session_state.sent={}
 
 for name,symbol in PAIRS.items():
-    sig,conf,feats,mtf = score_multi(symbol)
-    otc = is_otc(name)
-    exp = expiry(conf, feats.get("ADX",30))
-    pocket = pocket_code(name,symbol)
-    rows.append([name,"OTC" if otc else "Биржевая",sig,conf,exp,pocket,
-                 f"M5={mtf['M5']} | M15={mtf['M15']} | M30={mtf['M30']}",
-                 f"RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD']}"])
-
-    if sig in ["BUY","SELL"] and conf>=thr:
-        prev = st.session_state.sent.get(name,{})
-        recent = time.time()-prev.get("ts",0)<MIN_SEND_GAP_S
+    sig,conf,feats,mtf=score_multi(symbol)
+    if conf==0:st.warning(f"⚠ Нет данных для {name}");continue
+    otc=is_otc(name)
+    exp=expiry(conf,feats.get("ADX",30))
+    rows.append([name,"OTC"if otc else"Биржевая",sig,conf,exp,pocket_code(name,symbol),
+                 f"M5={mtf['M5']}|M15={mtf['M15']}|M30={mtf['M30']}",
+                 f"RSI{feats['RSI']}|ADX{feats['ADX']}|MACD{feats['MACD']}"])
+    if sig in["BUY","SELL"]and conf>=thr:
+        prev=st.session_state.sent.get(name,{})
+        recent=time.time()-prev.get("ts",0)<MIN_SEND_GAP_S
         if not recent or conf>prev.get("conf",0):
             send_tg(name,symbol,sig,conf,exp,feats,mtf)
             st.session_state.sent[name]={"ts":time.time(),"conf":conf}
 
-df = pd.DataFrame(rows,columns=["Пара","Тип","Сигнал","Уверенность","Экспирация","Pocket код","Multi-TF","Индикаторы"])
-df = df.sort_values("Уверенность",ascending=False)
+df=pd.DataFrame(rows,columns=["Пара","Тип","Сигнал","Уверенность","Экспирация","Pocket","Multi-TF","Индикаторы"])
+if len(df):df=df.sort_values("Уверенность",ascending=False)
 st.dataframe(df,use_container_width=True)
-
 if len(df):
-    top = df.iloc[0]
-    st.subheader("📋 Копировать для Pocket Option:")
-    st.text_input("Tap to copy:", value=top["Pocket код"], key="copy_top")
-
+    top=df.iloc[0]
+    st.subheader("📋 Копировать код Pocket:")
+    st.text_input("Tap to copy:",value=top["Pocket"],key="copy_top")
 time.sleep(REFRESH_SEC)
-st.rerun
+st.rerun()

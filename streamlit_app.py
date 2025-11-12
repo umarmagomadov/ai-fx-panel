@@ -105,7 +105,41 @@ def get_or_fake(symbol):
     if cached is not None and len(cached) > 0:
         import pandas as pd  # если вверху файла нет — добавь один раз
 
-df = cached.copy()
+def get_or_fake(symbol):
+    """Реальные данные, иначе — кэш + синтетика"""
+    if "cache" not in st.session_state:
+        st.session_state.cache = {}
+
+    real = safe_download(symbol)
+    if real is not None:
+        st.session_state.cache[symbol] = real
+        return real
+
+    # нет новых — используем кэш и «подвинуем» последнюю свечу
+    cached = st.session_state.cache.get(symbol)
+    if cached is not None and len(cached) > 0:
+        import pandas as pd  # если вверху файла нет, добавляем здесь
+        df = cached.copy()
+        last = nudge_last(df)
+
+        # если nudge_last вернул Series, превращаем в DataFrame
+        if isinstance(last, pd.Series):
+            last = last.to_frame().T
+
+        # объединяем DataFrame без append()
+        df = pd.concat([df, last], ignore_index=False)
+
+        # сохраняем последние 600 строк в кэш
+        st.session_state.cache[symbol] = df.tail(600)
+        return st.session_state.cache[symbol]
+
+    # совсем пусто — создаём синтетические данные
+    idx = pd.date_range(end=datetime.utcnow(), periods=60, freq="1min")
+    base = 1.0 + random.random() / 10
+    vals = base * (1 + np.cumsum(np.random.randn(60)) / 100)
+    df = pd.DataFrame({"Open": vals, "High": vals, "Low": vals, "Close": vals}, index=idx)
+    st.session_state.cache[symbol] = df
+    return df
 last = nudge_last(df)
 
 # если nudge_last вернул Series, превращаем в DataFrame

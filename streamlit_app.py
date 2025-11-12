@@ -1,23 +1,29 @@
-# --- ТЕСТ ПОДКЛЮЧЕНИЯ К TELEGRAM ---
+import requests
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import streamlit as st# --- ТЕСТ ПОДКЛЮЧЕНИЯ К TELEGRAM ---
+import requests
+
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = st.secrets["CHAT_ID"]
 
+st.title("AI FX Panel")
+
 if st.button("📩 Отправить тест в Telegram"):
-    import requests
     try:
         test_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        test_data = {"chat_id": CHAT_ID, "text": "✅ Тест: бот подключен!"}
+        test_data = {
+            "chat_id": CHAT_ID,
+            "text": "✅ Тест: соединение с Telegram успешно!"
+        }
         r = requests.post(test_url, data=test_data)
         if r.status_code == 200:
             st.success("✅ Сообщение отправлено в Telegram!")
         else:
-            st.error(f"Ошибка: {r.text}")
+            st.error(f"Ошибка при отправке: {r.text}")
     except Exception as e:
-        st.error(f"Ошибка соединения: {e}")import requests
-import pandas as pd
-import numpy as np
-import yfinance as yf
-import streamlit as st
+        st.error(f"Ошибка соединения: {e}")
 import random
 import time
 import plotly.graph_objects as go

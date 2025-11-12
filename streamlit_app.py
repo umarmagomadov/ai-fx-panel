@@ -247,27 +247,48 @@ def choose_expiry(confidence: int, adx_value: float, rsi_value: float) -> int | 
 
     return int(max(1, min(30, base)))
 
-def send_telegram(pair_name: str, signal: str, confidence: int, expiry: int | None, feats: dict):
-    """Отправка сообщения в Telegram."""
-    if expiry is None:
-        exp_txt = "—"
-    else:
-        exp_txt = f"{expiry} мин"
+def send_telegram(pair, signal, confidence, expiry, feats):
+    """
+    Отправляет сигнал в Telegram с анализом тренда, риска и силы сигнала (в виде смайлов).
+    """
+    phase = feats.get("Phase", "неизв.")
+    risk = feats.get("Risk", "—")
+    rsi_v = feats.get("RSI", 0)
+    adx_v = feats.get("ADX", 0)
+    macd_v = feats.get("MACD_Hist", 0)
 
+    # --- Оценка силы сигнала по уверенности ---
+    if confidence < 60:
+        strength = "🔴 слабый"
+    elif confidence < 80:
+        strength = "🟡 средний"
+    else:
+        strength = "🟢 сильный"
+
+    # --- Формируем текст сообщения ---
     text = (
         f"🤖 *AI FX СИГНАЛ*\n"
-        f"💵 Пара: {pair_name}\n"
+        f"💵 Пара: {pair}\n"
         f"📊 Сигнал: {signal}\n"
-        f"💪 Уверенность: {confidence}%\n"
-        f"⏱ Экспирация: {exp_txt}\n"
-        f"⚙️ RSI {feats.get('RSI','?')} | ADX {feats.get('ADX','?')} | MACD {feats.get('MACD_Hist','?')}\n"
-        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')}"
+        f"⚙️ Фаза: {phase}\n"
+        f"{risk}\n"
+        f"💪 Уверенность: {confidence}% ({strength})\n"
+        f"⏱ Экспирация: {expiry} мин\n"
+        f"📈 RSI {rsi_v} | ADX {adx_v} | MACD {macd_v}\n"
+        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
     )
+
+    # --- Отправка в Telegram ---
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+        requests.post(url, data={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "parse_mode": "Markdown"
+        })
+        print(f"✅ Отправлено: {pair} {signal} ({confidence}%) — {strength}")
     except Exception as e:
-        st.toast(f"TG error: {e}", icon="⚠️")
+        st.toast(f"Ошибка Telegram: {e}", icon="⚠️")
 
 # --------- UI ---------
 st.set_page_config(page_title="AI FX Panel Pro", layout="wide")

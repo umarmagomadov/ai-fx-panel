@@ -170,27 +170,40 @@ if confidence < 60:
     print(f"⚠️ Пропущен слабый сигнал по {pair} (уверенность {confidence}%)")
     continue
         base = 1
-    elif confidence < 65:
-        base = 3
-    elif confidence < 75:
-        base = 6
-    elif confidence < 85:
-        base = 10
-    elif confidence < 90:
-        base = 15
-    elif confidence < 95:
-        base = 20
-    else:
-        base = 25
+    # --- УМНЫЙ ВЫБОР ВРЕМЕНИ ЭКСПИРАЦИИ ---
 
-    # корректировка по силе тренда ADX
-    if adx_value >= 50:
-        base += 5       # очень сильный тренд → держим дольше
-    elif adx_value < 20:
-        base = max(1, base - 2)  # слабый тренд → понижаем
+# Базовое время по уверенности сигнала
+if confidence < 65:
+    base = 2
+elif confidence < 75:
+    base = 5
+elif confidence < 85:
+    base = 8
+elif confidence < 90:
+    base = 12
+elif confidence < 95:
+    base = 18
+else:
+    base = 25
 
-    # ограничиваем диапазон
-    expiry = int(max(1, min(30, base)))
+# Корректировка по силе тренда (ADX)
+if adx_value >= 50:
+    base += 10  # очень сильный тренд → даём больше времени
+elif adx_value >= 30:
+    base += 5   # средний тренд
+elif adx_value < 20:
+    base = max(2, base - 3)  # слабый тренд → уменьшаем
+
+# Корректировка по волатильности (на основе RSI)
+if 40 < rsi_value < 60:
+    base = max(2, base - 2)  # флет → сокращаем время
+elif rsi_value < 30 or rsi_value > 70:
+    base += 5  # зона перекупленности/перепроданности → больше времени
+
+# Ограничиваем диапазон (чтобы не уходил в экстремальные значения)
+expiry = int(max(1, min(45, base)))
+
+return expiry
     return expiry
 
 # --- РАСЧЁТ УВЕРЕННОСТИ СИГНАЛА ---

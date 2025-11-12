@@ -4,12 +4,11 @@ import numpy as np
 import yfinance as yf
 import random
 import requests
-from datetime import datetime
+from datetime import datetimeimport streamlit as st
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = st.secrets["CHAT_ID"]
 
 st.title("AI FX Panel")
-import streamlit as st
 
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = st.secrets["CHAT_ID"]

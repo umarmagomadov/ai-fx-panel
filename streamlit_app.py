@@ -2,7 +2,7 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import streamlit as st# --- ТЕСТ ПОДКЛЮЧЕНИЯ К TELEGRAM ---
+import random
 import requests
 from datetime import datetime
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]

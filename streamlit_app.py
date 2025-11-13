@@ -62,6 +62,24 @@ PAIRS = {
     "DOGEUSD (Dogecoin)": "DOGE-USD",
 }
 
+# ================== МЕЛКИЕ ХЕЛПЕРЫ ==============
+def safe_float(x, default: float = 0.0) -> float:
+    """
+    Безопасно конвертирует всё во float.
+    Если NaN / ошибка -> возвращает default.
+    """
+    try:
+        v = pd.to_numeric(x, errors="coerce")
+        # если вдруг серия / массив
+        if hasattr(v, "iloc"):
+            v = v.iloc[-1]
+        v = float(v)
+        if np.isnan(v):
+            return default
+        return v
+    except Exception:
+        return default
+
 # ================== INDICATORS ===============
 def ema(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(span=n, adjust=False).mean()
@@ -123,7 +141,7 @@ def safe_download(symbol: str, period: str, interval: str) -> pd.DataFrame | Non
 
 def nudge_last(df: pd.DataFrame, max_bps: float = 5) -> pd.Series:
     last = df.iloc[-1].copy()
-    c = float(last["Close"])
+    c = safe_float(last["Close"], 1.0)
     bps = random.uniform(-max_bps, max_bps) / 10000.0
     new_c = max(1e-9, c * (1 + bps))
     last["Open"] = c
@@ -171,7 +189,7 @@ def is_otc(name: str, symbol: str) -> bool:
         return True
     if "=f" in symbol.lower():  # фьючерсы
         return True
-    if "-" in symbol:          # криптовалюты, BTC-USD
+    if "-" in symbol:          # крипта BTC-USD
         return True
     return False
 
@@ -196,10 +214,10 @@ def pocket_code(name: str, symbol: str) -> str:
 
 def candle_phase(df: pd.DataFrame) -> str:
     last = df.iloc[-1]
-    o = float(last["Open"])
-    h = float(last["High"])
-    l = float(last["Low"])
-    c = float(last["Close"])
+    o = safe_float(last["Open"])
+    h = safe_float(last["High"])
+    l = safe_float(last["Low"])
+    c = safe_float(last["Close"])
     rng = max(1e-9, h - l)
     pos = (c - l) / rng
     if pos < 0.33:
@@ -210,9 +228,9 @@ def candle_phase(df: pd.DataFrame) -> str:
 
 def near_sr(df: pd.DataFrame) -> str | None:
     close = df["Close"]
-    last_close = float(close.iloc[-1])
-    sup = float(df["Low"].rolling(20).min().iloc[-1])
-    res = float(df["High"].rolling(20).max().iloc[-1])
+    last_close = safe_float(close.iloc[-1])
+    sup = safe_float(df["Low"].rolling(20).min().iloc[-1])
+    res = safe_float(df["High"].rolling(20).max().iloc[-1])
     if abs(last_close - sup) / max(1e-9, last_close) < 0.002:
         return "support"
     if abs(last_close - res) / max(1e-9, last_close) < 0.002:
@@ -224,27 +242,19 @@ def momentum_spike(df: pd.DataFrame) -> bool:
     if df is None or len(df) < 12:
         return False
     close = df["Close"]
-
-    # движение последней свечи
-    last_move = float(abs(close.iloc[-1] - close.iloc[-2]))
-
-    # среднее движение последних 10 свечей
+    last_move = abs(safe_float(close.iloc[-1]) - safe_float(close.iloc[-2]))
     avg_raw = close.diff().abs().rolling(10).mean().iloc[-1]
-    try:
-        avg_move = float(pd.to_numeric(avg_raw, errors="coerce"))
-    except Exception:
+    avg_move = safe_float(avg_raw, 0.0)
+    if avg_move == 0.0:
         return False
-
-    if np.isnan(avg_move) or avg_move == 0.0:
-        return False
-
     return bool(last_move > 1.5 * avg_move)
 
 def tf_direction(df: pd.DataFrame) -> str:
     close = df["Close"]
     macd_line, macd_sig, macd_hist = macd(close)
-    rsv = float(rsi(close).iloc[-1])
-    mh = float(macd_hist.iloc[-1])
+    rsi_series = rsi(close)
+    rsv = safe_float(rsi_series.iloc[-1], 50.0)
+    mh = safe_float(macd_hist.iloc[-1], 0.0)
     if mh > 0 and rsv > 50:
         return "BUY"
     if mh < 0 and rsv < 50:
@@ -263,7 +273,7 @@ def boll_width(close: pd.Series, n=20, k=2.0) -> float:
     sd = close.rolling(n).std()
     up = ma + k * sd
     lo = ma - k * sd
-    return float(((up.iloc[-1] - lo.iloc[-1]) / (ma.iloc[-1] + 1e-9)) * 100)
+    return safe_float(((up.iloc[-1] - lo.iloc[-1]) / (ma.iloc[-1] + 1e-9)) * 100)
 
 # ============== CORE SCORING (M5) ============
 def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
@@ -284,27 +294,35 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
         )
 
     close = df["Close"]
-    rsi_series = rsi(close)
-    rsv = float(rsi_series.iloc[-1])
-    rsv_prev = float(rsi_series.iloc[-2]) if len(rsi_series) > 2 else rsv
-    ema9 = float(ema(close, 9).iloc[-1])
-    ema21 = float(ema(close, 21).iloc[-1])
-    ema200 = float(ema(close, 200).iloc[-1])
-    _, _, mh = macd(close)
-    mhv = float(mh.iloc[-1])
-    up, mid, lo, w = bbands(close)
-    bb_pos = float((close.iloc[-1] - mid.iloc[-1]) /
-                   (up.iloc[-1] - lo.iloc[-1] + 1e-9))
 
-    # ADX безопасно
+    # RSI
+    rsi_series = rsi(close)
+    rsv = safe_float(rsi_series.iloc[-1], 50.0)
+    rsv_prev = safe_float(
+        rsi_series.iloc[-2], rsv
+    ) if len(rsi_series) > 2 else rsv
+
+    # EMA
+    ema9 = safe_float(ema(close, 9).iloc[-1], rsv)
+    ema21 = safe_float(ema(close, 21).iloc[-1], rsv)
+    ema200 = safe_float(ema(close, 200).iloc[-1], rsv)
+
+    # MACD
+    _, _, mh = macd(close)
+    mhv = safe_float(mh.iloc[-1], 0.0)
+
+    # Bollinger
+    up, mid, lo, w = bbands(close)
+    bb_pos = safe_float(
+        (close.iloc[-1] - mid.iloc[-1]) /
+        (up.iloc[-1] - lo.iloc[-1] + 1e-9),
+        0.0,
+    )
+    w_last = safe_float(w.iloc[-1], 0.0)
+
+    # ADX
     adx_series = adx(df)
-    try:
-        adx_raw = adx_series.iloc[-1]
-        adx_v = float(pd.to_numeric(adx_raw, errors="coerce"))
-        if pd.isna(adx_v):
-            adx_v = 0.0
-    except Exception:
-        adx_v = 0.0
+    adx_v = safe_float(adx_series.iloc[-1], 0.0)
 
     # голосование
     vu = 0
@@ -344,7 +362,7 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
         "ADX": round(adx_v, 1),
         "MACD_Hist": round(mhv, 6),
         "BB_Pos": round(bb_pos, 3),
-        "BB_Width": round(float(w.iloc[-1]), 2),
+        "BB_Width": round(w_last, 2),
         "EMA9_minus_EMA21": round(ema9 - ema21, 6),
         "EMA200": round(ema200, 6),
     }
@@ -352,14 +370,14 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
 
 # ============== MULTI-TF FUSION =============
 def score_multi_tf(symbol: str) -> tuple[str, int, dict, dict]:
-    df_main = get_or_fake(symbol, TF_MAIN[1], TF_MAIN[0])
-    df_mid = get_or_fake(symbol, TF_MID[1], TF_MID[0])
+    df_main  = get_or_fake(symbol, TF_MAIN[1],  TF_MAIN[0])
+    df_mid   = get_or_fake(symbol, TF_MID[1],   TF_MID[0])
     df_trend = get_or_fake(symbol, TF_TREND[1], TF_TREND[0])
 
     sig, conf, feats = score_single(df_main)
 
-    d_main = tf_direction(df_main)
-    d_mid = tf_direction(df_mid)
+    d_main  = tf_direction(df_main)
+    d_mid   = tf_direction(df_mid)
     d_trend = tf_direction(df_trend)
 
     agree = 0
@@ -497,7 +515,7 @@ def send_telegram(pair_name: str, pair_code: str, mtype: str,
 
 # ============== STREAMLIT UI =================
 st.set_page_config(page_title="AI FX v101.1 — M5+M15+M30", layout="wide")
-st.title("🤖 AI FX Signal Bot v101.1 — Triple-Timeframe + OTC / Биржевая + Pocket Copy")
+st.title("🤖 AI FX Signal Bot v101.1 — Triple-Timeframe + OTC/Биржевая + Pocket Copy")
 
 c1, c2 = st.columns([1, 1])
 with c1:

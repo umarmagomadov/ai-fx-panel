@@ -10,10 +10,8 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 
-# ================== TELEGRAM ==================
-# ⚠️ Ты сам дал токен и chat_id, поэтому пишу их прямо в код.
-TELEGRAM_TOKEN = "7327265057:AAHoDsXxlKodgEYbtAsA1glZegTpeV4_oO4"
-CHAT_ID = "6045310859"
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+CHAT_ID = st.secrets["CHAT_ID"]
 
 # ================== НАСТРОЙКИ =================
 REFRESH_SEC = 1              # автообновление страницы (сек)

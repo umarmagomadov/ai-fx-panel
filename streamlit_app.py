@@ -220,13 +220,24 @@ def near_sr(df: pd.DataFrame) -> str | None:
     return None
 
 def momentum_spike(df: pd.DataFrame) -> bool:
-    if len(df) < 12:
+    """Проверка импульса — безопасная, без ValueError."""
+    if df is None or len(df) < 12:
         return False
     close = df["Close"]
-    last_move = abs(close.iloc[-1] - close.iloc[-2])
-    avg_move = close.diff().abs().rolling(10).mean().iloc[-1]
-    if avg_move == 0 or pd.isna(avg_move):
+
+    # движение последней свечи
+    last_move = float(abs(close.iloc[-1] - close.iloc[-2]))
+
+    # среднее движение последних 10 свечей
+    avg_raw = close.diff().abs().rolling(10).mean().iloc[-1]
+    try:
+        avg_move = float(pd.to_numeric(avg_raw, errors="coerce"))
+    except Exception:
         return False
+
+    if np.isnan(avg_move) or avg_move == 0.0:
+        return False
+
     return bool(last_move > 1.5 * avg_move)
 
 def tf_direction(df: pd.DataFrame) -> str:
@@ -285,7 +296,7 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
     bb_pos = float((close.iloc[-1] - mid.iloc[-1]) /
                    (up.iloc[-1] - lo.iloc[-1] + 1e-9))
 
-    # ADX может иногда давать странный тип -> страхуем try/except
+    # ADX безопасно
     adx_series = adx(df)
     try:
         adx_raw = adx_series.iloc[-1]

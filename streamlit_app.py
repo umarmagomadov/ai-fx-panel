@@ -1,25 +1,15 @@
-import streamlit as st
-import statistics
-from collections import deque
-
-# ============================
-#   LUCKYJET ANALYZER MODULE
-# ============================
-
 class LuckyJetAnalyzer:
     def __init__(self, max_history=200):
         self.history = deque(maxlen=max_history)
 
     def add_multiplier(self, value):
-        """Добавляет множитель, гарантируя что это float"""
         try:
             x = float(value)
         except:
-            return  # игнорируем некорректный ввод
+            return
         self.history.append(x)
 
     def clean_history(self):
-        """Удаляет все некорректные значения"""
         cleaned = deque(maxlen=self.history.maxlen)
         for i in self.history:
             try:
@@ -28,83 +18,39 @@ class LuckyJetAnalyzer:
                 pass
         self.history = cleaned
 
-    def get_stats(self):
-        if len(self.history) == 0:
-            return None
+    def get_signal_advanced(self):
+        """AI-стиль сигналов как у интернет-ботов"""
+        if len(self.history) < 6:
+            return "⚪ Недостаточно данных"
 
         self.clean_history()
 
-        avg = statistics.mean(self.history)
-        low = len([i for i in self.history if i < 1.5])
-        mid = len([i for i in self.history if 1.5 <= i < 3])
-        high = len([i for i in self.history if i >= 3])
+        last5 = list(self.history)[-5:]
+        last = last5[-1]
 
-        return {
-            "count": len(self.history),
-            "average": round(avg, 2),
-            "low_runs": low,
-            "mid_runs": mid,
-            "high_runs": high,
-            "last": self.history[-1]
-        }
+        low_count = sum(1 for x in last5 if x < 1.5)
+        high_count = sum(1 for x in last5 if x > 3)
 
-    def get_signal(self):
-        if len(self.history) < 5:
-            return "Мало данных для анализа."
+        # ----- ЛОГИКА -----
 
-        self.clean_history()
+        # 1 — серия низких → шанс высокого ↑
+        if low_count >= 4:
+            return "🟩 СТАВИТЬ — серия низких, шанс высокого выше среднего"
 
-        last_values = list(self.history)[-5:]
-
-        last_values = [i for i in last_values if isinstance(i, (int, float))]
-
-        if len(last_values) < 5:
-            return "Недостаточно корректных данных."
-
-        low_series = sum(1 for i in last_values if i < 1.5)
-        if low_series >= 4:
-            return "⚠ Серия низких коэффициентов — шанс высокого × выше среднего."
-
-        last = last_values[-1]
-
+        # 2 — был высокий → обычно затем низкий
         if last > 5:
-            return "⚠ Последний × был высоким — следующий может быть низким."
+            return "🟥 НЕ СТАВИТЬ — только что был высокий"
 
-        if 1.5 <= last <= 3:
-            return "🟢 Стабильная зона — риск средний."
+        # 3 — серия хаотичная → осторожно
+        if high_count >= 2:
+            return "🟥 НЕ СТАВИТЬ — хаотичная серия"
 
+        # 4 — нормальная стабильная зона
+        if 1.4 <= last <= 3:
+            return "🟧 ОСТОРОЖНО — зона средней волатильности"
+
+        # 5 — очень низкий множитель → возможен средний
         if last < 1.2:
-            return "🟠 Очень низкий множитель — шанс среднего увеличен."
+            return "🟩 СТАВИТЬ — возможен средний множитель"
 
-        return "🟣 Нет явного сигнала."
-
-
-# ============================
-#   STREAMLIT INTERFACE
-# ============================
-
-st.title("🟣 LuckyJet Analyzer — AI Panel")
-
-# создаём объект анализатора
-if "lj" not in st.session_state:
-    st.session_state.lj = LuckyJetAnalyzer()
-
-lj = st.session_state.lj
-
-st.subheader("Добавить множитель")
-new_value = st.text_input("Введите коэффициент (например: 1.42, 17.15):")
-
-if st.button("Добавить"):
-    lj.add_multiplier(new_value)
-    st.success("Добавлено!")
-
-st.subheader("История множителей")
-st.write(list(lj.history))
-
-stats = lj.get_stats()
-if stats:
-    st.subheader("📊 Статистика")
-    st.write(stats)
-
-st.subheader("📡 Сигнал")
-st.write(lj.get_signal())
+        return "🟧 ОСТОРОЖНО — нет чёткого паттерна"

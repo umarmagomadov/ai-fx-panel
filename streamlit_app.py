@@ -1,26 +1,38 @@
+import streamlit as st
+import statistics
+from collections import deque
+
 # ============================
 #   LUCKYJET ANALYZER MODULE
 # ============================
 
-import statistics
-from collections import deque
-
 class LuckyJetAnalyzer:
-    def __init__(self, max_history=100):
+    def __init__(self, max_history=200):
         self.history = deque(maxlen=max_history)
 
-    def add_multiplier(self, x):
-        """Добавить новый множитель после окончания раунда"""
+    def add_multiplier(self, value):
+        """Добавляет множитель, гарантируя что это float"""
         try:
-            x = float(x)
+            x = float(value)
         except:
-            return None
+            return  # игнорируем некорректный ввод
         self.history.append(x)
 
+    def clean_history(self):
+        """Удаляет все некорректные значения"""
+        cleaned = deque(maxlen=self.history.maxlen)
+        for i in self.history:
+            try:
+                cleaned.append(float(i))
+            except:
+                pass
+        self.history = cleaned
+
     def get_stats(self):
-        """Возвращает статистические данные"""
         if len(self.history) == 0:
             return None
+
+        self.clean_history()
 
         avg = statistics.mean(self.history)
         low = len([i for i in self.history if i < 1.5])
@@ -37,43 +49,62 @@ class LuckyJetAnalyzer:
         }
 
     def get_signal(self):
-        """Выдаёт сигналы на основе статистики (НЕ прогноз)"""
-
         if len(self.history) < 5:
-            return "Мало данных…"
+            return "Мало данных для анализа."
 
-        last = self.history[-1]
+        self.clean_history()
 
-        # Серия низких множителей
-        low_series = sum(1 for i in self.history[-5:] if i < 1.5)
+        last_values = list(self.history)[-5:]
+
+        last_values = [i for i in last_values if isinstance(i, (int, float))]
+
+        if len(last_values) < 5:
+            return "Недостаточно корректных данных."
+
+        low_series = sum(1 for i in last_values if i < 1.5)
         if low_series >= 4:
-            return "⚠ Возможен высокий множитель (по серии низких)."
+            return "⚠ Серия низких коэффициентов — шанс высокого × выше среднего."
 
-        # После высокого обычно идёт низкий
+        last = last_values[-1]
+
         if last > 5:
-            return "⚠ Последний выстрел был высокий: сейчас повышенный риск низкого."
+            return "⚠ Последний × был высоким — следующий может быть низким."
 
-        # Стабильная зона
         if 1.5 <= last <= 3:
-            return "🟢 Стабильная зона. Риск умеренный."
+            return "🟢 Стабильная зона — риск средний."
 
-        # Очень низкий множитель
         if last < 1.2:
-            return "🟠 Очень низкий множитель: возможен средний."
+            return "🟠 Очень низкий множитель — шанс среднего увеличен."
 
-        return "🟣 Нет чёткого сигнала."
+        return "🟣 Нет явного сигнала."
 
 
 # ============================
-#     ПРИМЕР ИСПОЛЬЗОВАНИЯ
+#   STREAMLIT INTERFACE
 # ============================
 
-if __name__ == "__main__":
-    lj = LuckyJetAnalyzer()
+st.title("🟣 LuckyJet Analyzer — AI Panel")
 
-    # добавляем историю
-    for x in [1.24, 1.12, 1.45, 2.1, 3.5, 1.03, 1.11]:
-        lj.add_multiplier(x)
+# создаём объект анализатора
+if "lj" not in st.session_state:
+    st.session_state.lj = LuckyJetAnalyzer()
 
-    print(lj.get_stats())
-    print(lj.get_signal())
+lj = st.session_state.lj
+
+st.subheader("Добавить множитель")
+new_value = st.text_input("Введите коэффициент (например: 1.42, 17.15):")
+
+if st.button("Добавить"):
+    lj.add_multiplier(new_value)
+    st.success("Добавлено!")
+
+st.subheader("История множителей")
+st.write(list(lj.history))
+
+stats = lj.get_stats()
+if stats:
+    st.subheader("📊 Статистика")
+    st.write(stats)
+
+st.subheader("📡 Сигнал")
+st.write(lj.get_signal())

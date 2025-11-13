@@ -191,7 +191,6 @@ def pocket_code(name: str, symbol: str) -> str:
             "BZ=F": "BRENT/USD",
         }
         return mapping[symbol]
-    # запасной вариант — просто чистим имя
     clean = "".join(ch for ch in name if ch.isalnum() or ch in "/").upper()
     return clean
 
@@ -285,8 +284,16 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
     up, mid, lo, w = bbands(close)
     bb_pos = float((close.iloc[-1] - mid.iloc[-1]) /
                    (up.iloc[-1] - lo.iloc[-1] + 1e-9))
+
+    # ADX может иногда давать странный тип -> страхуем try/except
     adx_series = adx(df)
-    adx_v = float(adx_series.iloc[-1])
+    try:
+        adx_raw = adx_series.iloc[-1]
+        adx_v = float(pd.to_numeric(adx_raw, errors="coerce"))
+        if pd.isna(adx_v):
+            adx_v = 0.0
+    except Exception:
+        adx_v = 0.0
 
     # голосование
     vu = 0

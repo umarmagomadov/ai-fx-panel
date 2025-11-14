@@ -1,8 +1,7 @@
-# ========================= AI FX Bot v3.3 =========================
-# M1 + M5 + M15 + M30 + Telegram (Safe A-mode)
-# Работает с секретами Streamlit:
-#   TELEGRAM_TOKEN = "..."
-#   CHAT_ID        = "..."
+# ===================== AI FX Bot v4.0 =====================
+# M1 + M5 + M15 + M30 + Telegram
+# Фильтр Safe / Normal / Hard / Ultra
+# Отправляет только самые сильные сигналы (класс A/B)
 
 import time
 import json
@@ -15,34 +14,35 @@ import pandas as pd
 import yfinance as yf
 import requests
 import streamlit as st
+import plotly.graph_objects as go
 
-# ======================== SECRETS ================================
+# ==================== SECRETS =====================
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID        = st.secrets.get("CHAT_ID", "")
 
-# ======================== SETTINGS ===============================
-REFRESH_SEC        = 1      # автообновление страницы (сек)
-ONLY_NEW           = True   # не спамим одинаковыми сигналами
-MIN_SEND_GAP_S     = 300    # мин. пауза между сигналами по 1 паре (5 минут)
-BASE_CONF_THRESHOLD = 80    # базовый минимум уверенности
+# ==================== SETTINGS ====================
+REFRESH_SEC       = 1       # автообновление
+ONLY_NEW          = True    # не спамим одинаковыми
+MIN_SEND_GAP_S    = 60      # пауза между сигналами по паре
+BASE_CONF_THRESH  = 70      # базовый минимум
 
-# Режимы фильтра (Safe A-mode по умолчанию)
+# Режимы фильтра
 MODES = {
-    "Safe 85% (A-mode)": 85,
-    "Normal 90%":        90,
-    "Hard 95%":          95,
-    "Ultra 99%":         99,
+    "Safe 85%":   85,
+    "Normal 90%": 90,
+    "Hard 95%":   95,
+    "Ultra 99%":  99,
 }
 
 # Таймфреймы
 TF_M1  = ("1m",  "1d")
 TF_M5  = ("5m",  "5d")
-TF_M15 = ("15m", "10d")
-TF_M30 = ("30m", "30d")
+TF_M15 = ("15m", "5d")
+TF_M30 = ("30m", "10d")
 
-# ======================== ИНСТРУМЕНТЫ ============================
+# ==================== ИНСТРУМЕНТЫ ====================
 PAIRS = {
-    # Forex
+    # Основные Forex
     "EURUSD": "EURUSD=X",
     "GBPUSD": "GBPUSD=X",
     "USDJPY": "USDJPY=X",
@@ -56,30 +56,15 @@ PAIRS = {
     "CADJPY": "CADJPY=X",
     "CHFJPY": "CHFJPY=X",
     "EURGBP": "EURGBP=X",
-    "EURCHF": "EURCHF=X",
-    "EURCAD": "EURCAD=X",
     "EURAUD": "EURAUD=X",
-    "GBPCAD": "GBPCAD=X",
     "GBPAUD": "GBPAUD=X",
-    "AUDCAD": "AUDCAD=X",
-    "NZDJPY": "NZDJPY=X",
 
-    # Commodities (фьючерсы)
-    "XAUUSD (Gold)":   "GC=F",
-    "XAGUSD (Silver)": "SI=F",
-    "WTI (Oil)":       "CL=F",
-    "BRENT (Oil)":     "BZ=F",
-
-    # Crypto
-    "BTCUSD (Bitcoin)":   "BTC-USD",
-    "ETHUSD (Ethereum)":  "ETH-USD",
-    "SOLUSD (Solana)":    "SOL-USD",
-    "XRPUSD (XRP)":       "XRP-USD",
-    "BNBUSD (BNB)":       "BNB-USD",
-    "DOGEUSD (Dogecoin)": "DOGE-USD",
+    # Немного OTC/крипты
+    "BTCUSD (Bitcoin)":  "BTC-USD",
+    "ETHUSD (Ethereum)": "ETH-USD",
 }
 
-# ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===================
+# ==================== ХЕЛПЕРЫ ====================
 def safe_float(x, default: float = 0.0) -> float:
     try:
         v = pd.to_numeric(x, errors="coerce")
@@ -124,13 +109,13 @@ def adx(df: pd.DataFrame, n=14) -> pd.Series:
     h = df["High"]
     l = df["Low"]
     c = df["Close"]
-    up_move = h.diff()
-    dn_move = -l.diff()
-    plus_dm = up_move.where((up_move > 0) & (up_move > dn_move), 0.0).fillna(0)
+    up_move  = h.diff()
+    dn_move  = -l.diff()
+    plus_dm  = up_move.where((up_move > 0) & (up_move > dn_move), 0.0).fillna(0)
     minus_dm = dn_move.where((dn_move > 0) & (dn_move > up_move), 0.0).fillna(0)
     tr = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     atr = tr.rolling(n).mean()
-    plus_di = 100 * (plus_dm.rolling(n).sum() / (atr + 1e-9))
+    plus_di  = 100 * (plus_dm.rolling(n).sum()  / (atr + 1e-9))
     minus_di = 100 * (minus_dm.rolling(n).sum() / (atr + 1e-9))
     dx = 100 * ((plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-9))
     return dx.rolling(n).mean()
@@ -142,14 +127,6 @@ def boll_width(close: pd.Series, n=20, k=2.0) -> float:
     up = ma + k * sd
     lo = ma - k * sd
     return safe_float(((up.iloc[-1] - lo.iloc[-1]) / (ma.iloc[-1] + 1e-9)) * 100)
-
-
-def market_regime(adx_val: float, bw: float) -> str:
-    if adx_val < 18 and bw < 3:
-        return "flat"
-    if adx_val > 25 and bw < 7:
-        return "trend"
-    return "impulse"
 
 
 def candle_phase(df: pd.DataFrame) -> str:
@@ -167,13 +144,45 @@ def candle_phase(df: pd.DataFrame) -> str:
     return "end"
 
 
+def near_sr(df: pd.DataFrame) -> str | None:
+    close = df["Close"]
+    last_close = safe_float(close.iloc[-1])
+    sup = safe_float(df["Low"].rolling(40).min().iloc[-1])
+    res = safe_float(df["High"].rolling(40).max().iloc[-1])
+    if abs(last_close - sup) / max(1e-9, last_close) < 0.002:
+        return "support"
+    if abs(last_close - res) / max(1e-9, last_close) < 0.002:
+        return "resistance"
+    return None
+
+
+def momentum_spike(df: pd.DataFrame) -> bool:
+    if df is None or len(df) < 12:
+        return False
+    close = df["Close"]
+    last_move = abs(safe_float(close.iloc[-1]) - safe_float(close.iloc[-2]))
+    avg_raw = close.diff().abs().rolling(10).mean().iloc[-1]
+    avg_move = safe_float(avg_raw, 0.0)
+    if avg_move == 0.0:
+        return False
+    return bool(last_move > 1.5 * avg_move)
+
+
+def market_regime(adx_val: float, bw: float) -> str:
+    if adx_val < 18 and bw < 3.0:
+        return "flat"
+    if adx_val > 28 and bw < 7.0:
+        return "trend"
+    return "impulse"
+
+
 def is_otc(name: str, symbol: str) -> bool:
     n = name.lower()
     if "otc" in n:
         return True
     if "=f" in symbol.lower():
         return True
-    if "-" in symbol:  # крипта BTC-USD
+    if "-" in symbol:
         return True
     return False
 
@@ -185,18 +194,10 @@ def pocket_code(name: str, symbol: str) -> str:
             return f"{base[:3]}/{base[3:]}"
     if symbol.endswith("-USD"):
         return symbol.replace("-USD", "/USD")
-    if symbol in {"GC=F", "SI=F", "CL=F", "BZ=F"}:
-        mapping = {
-            "GC=F": "XAU/USD",
-            "SI=F": "XAG/USD",
-            "CL=F": "WTI/USD",
-            "BZ=F": "BRENT/USD",
-        }
-        return mapping[symbol]
     clean = "".join(ch for ch in name if ch.isalnum() or ch in "/").upper()
     return clean
 
-# ===================== ЗАГРУЗКА ДАННЫХ ============================
+# ==================== DATA ====================
 def _cache_key(symbol: str, interval: str) -> str:
     return f"{symbol}__{interval}"
 
@@ -210,7 +211,7 @@ def safe_download(symbol: str, period: str, interval: str) -> pd.DataFrame | Non
             auto_adjust=True,
             progress=False,
         )
-        if df is None or len(df) < 30:
+        if df is None or len(df) < 40:
             return None
         df = df[["Open", "High", "Low", "Close"]].copy()
         return df.tail(600)
@@ -234,8 +235,8 @@ def nudge_last(df: pd.DataFrame, max_bps: float = 5) -> pd.Series:
 def get_or_fake(symbol: str, period: str, interval: str) -> pd.DataFrame:
     if "cache" not in st.session_state:
         st.session_state.cache = {}
-
     key = _cache_key(symbol, interval)
+
     real = safe_download(symbol, period, interval)
     if real is not None:
         st.session_state.cache[key] = real.copy()
@@ -261,9 +262,13 @@ def get_or_fake(symbol: str, period: str, interval: str) -> pd.DataFrame:
     st.session_state.cache[key] = df
     return df
 
-# ===================== ОЦЕНКА СИГНАЛОВ (M5 базовый) ===============
-def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
-    if df is None or len(df) < 30:
+# ==================== SCORING ====================
+def score_tf(df: pd.DataFrame) -> tuple[str, int, dict]:
+    """
+    Оценка направления по одному ТФ.
+    Возвращает: direction(BUY/SELL/FLAT), confidence(0-100), features.
+    """
+    if df is None or len(df) < 40:
         return "FLAT", 0, {
             "RSI": 50.0,
             "ADX": 0.0,
@@ -275,16 +280,22 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
 
     rsi_series = rsi(close)
     rsv = safe_float(rsi_series.iloc[-1], 50.0)
+    rsv_prev = safe_float(rsi_series.iloc[-2], rsv) if len(rsi_series) > 2 else rsv
 
-    ema20 = safe_float(ema(close, 20).iloc[-1], rsv)
-    ema50 = safe_float(ema(close, 50).iloc[-1], rsv)
+    ema9  = safe_float(ema(close, 9).iloc[-1], rsv)
+    ema21 = safe_float(ema(close, 21).iloc[-1], rsv)
     ema200 = safe_float(ema(close, 200).iloc[-1], rsv)
 
     _, _, mh = macd(close)
     mhv = safe_float(mh.iloc[-1], 0.0)
 
     up, mid, lo, w = bbands(close)
-    bw = safe_float(w.iloc[-1], 0.0)
+    bb_width = safe_float(w.iloc[-1], 0.0)
+    bb_pos = safe_float(
+        (close.iloc[-1] - mid.iloc[-1]) /
+        (up.iloc[-1] - lo.iloc[-1] + 1e-9),
+        0.0,
+    )
 
     adx_series = adx(df)
     adx_v = safe_float(adx_series.iloc[-1], 0.0)
@@ -292,35 +303,21 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
     vu = 0
     vd = 0
 
-    # RSI
-    if rsv < 32:
+    if rsv < 35:
         vu += 1
-    if rsv > 68:
+    if rsv > 65:
         vd += 1
-
-    # EMA
-    if ema20 > ema50:
+    if ema9 > ema21:
         vu += 1
-    if ema20 < ema50:
+    if ema9 < ema21:
         vd += 1
-    if ema50 > ema200:
-        vu += 1
-    if ema50 < ema200:
-        vd += 1
-
-    # MACD
     if mhv > 0:
         vu += 1
     if mhv < 0:
         vd += 1
-
-    # Bollinger позиция (стороной)
-    last_close = safe_float(close.iloc[-1], rsv)
-    up_last = safe_float(up.iloc[-1], last_close)
-    lo_last = safe_float(lo.iloc[-1], last_close)
-    if last_close <= lo_last:
+    if bb_pos < -0.25:
         vu += 1
-    if last_close >= up_last:
+    if bb_pos > 0.25:
         vd += 1
 
     if vu == vd:
@@ -330,217 +327,233 @@ def score_single(df: pd.DataFrame) -> tuple[str, int, dict]:
     else:
         direction = "SELL"
 
-    raw = abs(vu - vd) / 6.0
-    trend_boost = min(max((adx_v - 20) / 25, 0), 1)
+    raw = abs(vu - vd) / 4.0
+    trend_boost = min(max((adx_v - 18) / 25, 0), 1)
     conf = int(100 * (0.55 * raw + 0.45 * trend_boost))
     conf = max(0, min(99, conf))
 
     feats = {
         "RSI": round(rsv, 1),
+        "RSI_prev": round(rsv_prev, 1),
         "ADX": round(adx_v, 1),
-        "MACD_Hist": round(mhv, 5),
-        "BB_Width": round(bw, 2),
+        "MACD_Hist": round(mhv, 6),
+        "BB_Width": round(bb_width, 2),
+        "BB_Pos": round(bb_pos, 3),
+        "EMA9-21": round(ema9 - ema21, 6),
+        "EMA200": round(ema200, 6),
     }
     return direction, conf, feats
 
 
-def tf_direction(df: pd.DataFrame) -> str:
-    close = df["Close"]
-    macd_line, macd_sig, macd_hist = macd(close)
-    rsi_series = rsi(close)
-    rsv = safe_float(rsi_series.iloc[-1], 50.0)
-    mh = safe_float(macd_hist.iloc[-1], 0.0)
-    if mh > 0 and rsv > 50:
-        return "BUY"
-    if mh < 0 and rsv < 50:
-        return "SELL"
-    return "FLAT"
+def combine_multi_tf(df_m1, df_m5, df_m15, df_m30) -> tuple[str, int, str, dict]:
+    """
+    Объединение 4 таймфреймов.
+    Возвращает: signal(BUY/SELL/FLAT), conf, class(A+/A/B/C),
+    а также dict с описанием по ТФ.
+    """
+    d1, c1, f1 = score_tf(df_m1)
+    d5, c5, f5 = score_tf(df_m5)
+    d15, c15, f15 = score_tf(df_m15)
+    d30, c30, f30 = score_tf(df_m30)
 
+    dirs = [d1, d5, d15, d30]
+    confs = [c1, c5, c15, c30]
 
-def score_multi_tf(symbol: str) -> tuple[str, int, dict, dict]:
-    df_m1  = get_or_fake(symbol, *TF_M1)
-    df_m5  = get_or_fake(symbol, *TF_M5)
-    df_m15 = get_or_fake(symbol, *TF_M15)
-    df_m30 = get_or_fake(symbol, *TF_M30)
+    # Требуем явное направление (нет FLAT и нет смешения BUY/SELL)
+    if any(d == "FLAT" for d in dirs):
+        return "FLAT", 0, "C", {
+            "M1": d1, "M5": d5, "M15": d15, "M30": d30,
+            "Conf": confs,
+        }
 
-    base_sig, base_conf, feats = score_single(df_m5)
+    if len(set(dirs)) != 1:
+        # нет единства -> пропускаем
+        return "FLAT", 0, "C", {
+            "M1": d1, "M5": d5, "M15": d15, "M30": d30,
+            "Conf": confs,
+        }
 
-    d_m1  = tf_direction(df_m1)
-    d_m5  = tf_direction(df_m5)
-    d_m15 = tf_direction(df_m15)
-    d_m30 = tf_direction(df_m30)
+    signal = dirs[0]
 
-    agree = 0
-    if d_m1 == d_m5 and d_m5 in ("BUY", "SELL"):
-        agree += 1
-    if d_m5 == d_m15 and d_m5 in ("BUY", "SELL"):
-        agree += 1
-    if d_m5 == d_m30 and d_m5 in ("BUY", "SELL"):
-        agree += 1
+    # Взвешенная уверенность (старшие ТФ важнее)
+    weights = np.array([1.0, 1.5, 2.0, 2.5])
+    base_conf = int(np.average(confs, weights=weights))
 
-    if base_sig in ("BUY", "SELL") and base_sig == d_m5:
-        base_conf += 5
-    else:
-        base_conf -= 5
+    # Доп.фильтры по старшему ТФ (M30)
+    bw = boll_width(df_m30["Close"])
+    adx_series = adx(df_m30)
+    adx_v = safe_float(adx_series.iloc[-1], 0.0)
+    regime = market_regime(adx_v, bw)
 
-    if agree == 3 and base_sig in ("BUY", "SELL"):
-        base_conf += 15
-    elif agree == 2:
-        base_conf += 8
-    elif agree == 1:
-        base_conf += 3
-    else:
-        base_conf -= 10
-
-    bw_main = boll_width(df_m5["Close"])
-    adx_v = feats["ADX"]
-    regime = market_regime(adx_v, bw_main)
     phase = candle_phase(df_m5)
+    sr = near_sr(df_m30)
+    spike = momentum_spike(df_m1)
 
-    if regime == "trend" and base_sig == d_m30 and d_m30 in ("BUY", "SELL"):
-        base_conf += 7
-    if regime == "flat":
-        base_conf -= 5
-    if phase == "end":
-        base_conf -= 4
+    conf = base_conf
 
-    base_conf = int(max(0, min(100, base_conf)))
+    # усиливаем тренд
+    if regime == "trend":
+        conf += 8
+    elif regime == "impulse":
+        conf += 4
+    else:  # flat
+        conf -= 10
 
-    mtf = {
-        "M1": d_m1,
-        "M5": d_m5,
-        "M15": d_m15,
-        "M30": d_m30,
+    # поддержка / сопротивление
+    if signal == "BUY" and sr == "support":
+        conf += 5
+    if signal == "SELL" and sr == "resistance":
+        conf += 5
+
+    # импульс на M1
+    if spike:
+        conf += 4
+
+    # фазa свечи на M5
+    if phase == "mid":
+        conf += 3
+    elif phase == "end":
+        conf -= 4
+
+    conf = int(max(0, min(100, conf)))
+
+    # Классификация
+    if conf >= 96:
+        trade_class = "A+"
+    elif conf >= 90:
+        trade_class = "A"
+    elif conf >= 85:
+        trade_class = "B"
+    else:
+        trade_class = "C"
+
+    info = {
+        "M1": d1,
+        "M5": d5,
+        "M15": d15,
+        "M30": d30,
+        "Conf_M1": c1,
+        "Conf_M5": c5,
+        "Conf_M15": c15,
+        "Conf_M30": c30,
         "Regime": regime,
         "Phase": phase,
+        "BW": round(bw, 2),
+        "ADX30": round(adx_v, 1),
     }
-    return base_sig, base_conf, feats, mtf
+    return signal, conf, trade_class, info
 
-# ===================== КЛАСС СИГНАЛА =============================
-def classify_signal(conf: int) -> str:
-    if conf >= 90:
-        return "A"
-    if conf >= 80:
-        return "B"
-    return "C"
 
-# ===================== EXPIRATION ================================
-def choose_expiry_tf(base_tf: str, conf: int) -> int:
-    if base_tf == "M1":
-        base = 1
-    elif base_tf == "M5":
-        base = 5
-    elif base_tf == "M15":
+def choose_expiry(conf: int, regime: str, phase: str) -> int:
+    if conf < 60:
+        return 0
+    if conf < 75:
+        base = 2
+    elif conf < 85:
+        base = 4
+    elif conf < 90:
+        base = 6
+    elif conf < 95:
         base = 10
     else:
-        base = 20
+        base = 15
 
-    if conf >= 95:
-        base += 2
-    elif conf <= 85:
+    # режим рынка
+    if regime == "trend":
+        base += 3
+    elif regime == "flat":
         base -= 1
+
+    # фаза свечи
+    if phase == "start":
+        base += 1
+    elif phase == "end":
+        base -= 2
 
     return int(max(1, min(30, base)))
 
-# ===================== TELEGRAM =================================
-def send_telegram(pair_name: str,
-                  pair_code: str,
-                  signal: str,
-                  conf: int,
-                  sig_class: str,
-                  expiry: int,
-                  feats: dict,
-                  mtf: dict,
-                  mtype: str) -> None:
+# ==================== TELEGRAM ====================
+def send_telegram(pair_name: str, pair_code: str, mtype: str,
+                  signal: str, conf: int, trade_class: str,
+                  expiry: int, mtf: dict) -> None:
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
-    arrow = "⬆️" if signal == "BUY" else ("⬇️" if signal == "SELL" else "➖")
+    arrow = "⬆️" if signal == "BUY" else "⬇️"
     copy_code = pocket_code(pair_name, pair_code)
 
-    trend_emoji = {
-        "flat": "⚪",
-        "trend": "📈",
-        "impulse": "💥",
-    }.get(mtf.get("Regime", "flat"), "⚪")
+    phase_map = {
+        "start": "🟢 начало",
+        "mid": "🟡 середина",
+        "end": "🔴 конец",
+    }
+    phase_txt = phase_map.get(mtf.get("Phase", ""), "❔")
 
-    phase_emoji = {
-        "start": "🟢",
-        "mid": "🟡",
-        "end": "🔴",
-    }.get(mtf.get("Phase", "mid"), "🟡")
+    if conf < 80:
+        strength = "🔴 слабый"
+    elif conf < 90:
+        strength = "🟡 нормальный"
+    else:
+        strength = "🟢 сильный"
 
     text = (
-        "🤖 AI FX Signal Bot v3.3 (Safe A-mode)\n"
+        "🤖 AI FX Signal Bot v4.0\n"
         f"💱 Пара: {pair_name}\n"
-        f"📌 Код для Pocket: `{copy_code}`\n"
-        f"🧾 Тип: {mtype}\n"
-        f"{arrow} Сигнал: *{signal}* (класс {sig_class})\n"
-        f"⏰ Экспирация: *{expiry} мин*\n"
-        f"📊 Multi-TF: M1={mtf['M1']} | M5={mtf['M5']} | M15={mtf['M15']} | M30={mtf['M30']}\n"
-        f"🌍 Режим: {mtf['Regime']} {trend_emoji} | Свеча: {phase_emoji}\n"
-        f"💪 Уверенность: *{conf}%*\n"
-        f"📈 RSI {feats['RSI']} | ADX {feats['ADX']} | MACD {feats['MACD_Hist']}\n"
-        f"⏱ {datetime.utcnow().strftime('%H:%M:%S')} UTC"
+        f"📌 Код для Pocket: {copy_code}\n"
+        f"🏷️ Тип: {mtype}\n"
+        f"{arrow} Сигнал: *{signal}* (класс {trade_class})\n"
+        f"🇲🇫 Multi-TF: M1={mtf['M1']} | M5={mtf['M5']} | "
+        f"M15={mtf['M15']} | M30={mtf['M30']}\n"
+        f"🌐 Рынок: {mtf['Regime']} | 🕯️ Свеча: {phase_txt}\n"
+        f"💪 Уверенность: *{conf}%* ({strength})\n"
+        f"⏱ Экспирация: *{expiry} мин*\n"
+        f"📊 ADX30={mtf['ADX30']} | BW={mtf['BW']}%\n"
+        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')} UTC"
     )
 
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={
-                "chat_id": CHAT_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-            },
+            data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
             timeout=10,
         )
     except Exception as e:
-        st.toast(f"Ошибка Telegram: {e}", icon="⚠️")
+        st.toast(f"Telegram error: {e}", icon="⚠️")
 
-# ===================== STREAMLIT UI ==============================
+# ==================== STREAMLIT UI ====================
 st.set_page_config(
-    page_title="AI FX Bot v3.3 — M1+M5+M15+M30 + Telegram (Safe)",
-    layout="wide"
+    page_title="AI FX Bot v4.0 — M1+M5+M15+M30 + Telegram",
+    layout="wide",
 )
 
-st.title("🤖 AI FX Bot v3.3 — M1+M5+M15+M30 + Telegram (Safe A-mode)")
-st.markdown(
-    "Режимы Safe/Normal/Hard/Ultra — это **фильтр сигналов**, а не гарантия дохода. "
-    "Бот — обучающий инструмент, не финансовый совет."
+st.title("🤖 AI FX Bot v4.0 — M1+M5+M15+M30 + Telegram")
+st.caption(
+    "Режимы Safe/Normal/Hard/Ultra — это стиль фильтра, а не реальная гарантия. "
+    "Бот — инструмент для обучения, не финсовет."
 )
 
-c_top1, c_top2 = st.columns(2)
-with c_top1:
-    mode_name = st.selectbox(
-        "Режим отбора сигналов",
-        list(MODES.keys()),
-        index=0,
-    )
-with c_top2:
-    slider_conf = st.slider(
+col_mode, col_conf, col_gap = st.columns([1, 1, 1])
+
+with col_mode:
+    mode_name = st.selectbox("Режим отбора сигналов", list(MODES.keys()), index=0)
+
+with col_conf:
+    user_conf = st.slider(
         "Минимальная уверенность (%) для сигнала",
-        50, 99, 85, 1,
+        50, 99, 85,
+        help="Минимум для попадания в таблицу. Для Telegram используется максимум из этого и режима.",
     )
 
-c_bot1, c_bot2 = st.columns(2)
-with c_bot1:
-    min_gap_ui = st.number_input(
+with col_gap:
+    min_gap = st.number_input(
         "Пауза между сигналами по паре (сек)",
-        10, 900, MIN_SEND_GAP_S,
+        10, 600, MIN_SEND_GAP_S,
     )
-with c_bot2:
-    st.caption("Safe A-mode: отправляем только сигналы **класса A** (иногда B), "
-               "согласованные на нескольких таймфреймах.")
 
-# обновляем реальные значения паузы
-MIN_SEND_GAP_S = int(min_gap_ui)
-
-mode_threshold = MODES.get(mode_name, BASE_CONF_THRESHOLD)
-working_threshold = max(mode_threshold, slider_conf)
+effective_threshold = max(user_conf, MODES[mode_name])
 
 st.markdown(
-    f"**Текущий рабочий порог для отправки сигналов:** "
-    f"`{working_threshold}%`"
+    f"**Текущий рабочий порог для отправки сигналов в Telegram:** {effective_threshold}%"
 )
 
 if "last_sent" not in st.session_state:
@@ -548,67 +561,62 @@ if "last_sent" not in st.session_state:
 
 rows = []
 
-# ===================== ОСНОВНОЙ ЦИКЛ ПО ПАРАМ ====================
+# ==================== MAIN LOOP ====================
 for name, symbol in PAIRS.items():
-    sig, conf, feats, mtf = score_multi_tf(symbol)
+    df_m1  = get_or_fake(symbol, TF_M1[1],  TF_M1[0])
+    df_m5  = get_or_fake(symbol, TF_M5[1],  TF_M5[0])
+    df_m15 = get_or_fake(symbol, TF_M15[1], TF_M15[0])
+    df_m30 = get_or_fake(symbol, TF_M30[1], TF_M30[0])
 
-    sig_class = classify_signal(conf)
-    base_tf = "M5"   # базовый вход М5
-    expiry = choose_expiry_tf(base_tf, conf)
+    sig, conf, trade_class, mtf = combine_multi_tf(df_m1, df_m5, df_m15, df_m30)
 
     otc_flag = is_otc(name, symbol)
     mtype = "OTC/24/7" if otc_flag else "Биржевая"
 
-    # Заполняем таблицу
+    expiry = choose_expiry(conf, mtf["Regime"], mtf["Phase"])
+    if otc_flag and expiry > 0:
+        expiry = min(60, expiry + 3)
+
+    multi_str = (
+        f"M1={mtf['M1']}({mtf['Conf_M1']}) | "
+        f"M5={mtf['M5']}({mtf['Conf_M5']}) | "
+        f"M15={mtf['M15']}({mtf['Conf_M15']}) | "
+        f"M30={mtf['M30']}({mtf['Conf_M30']})"
+    )
+
     rows.append([
         name,
         mtype,
         sig,
         conf,
-        sig_class,
+        trade_class,
         expiry,
-        f"M1={mtf['M1']} | M5={mtf['M5']} | M15={mtf['M15']} | M30={mtf['M30']}",
+        multi_str,
         mtf["Regime"],
         mtf["Phase"],
     ])
 
-    # ====== ЛОГИКА ОТПРАВКИ В TELEGRAM (Safe A-mode) ======
-    should_send = False
-    if sig in ("BUY", "SELL") and conf >= working_threshold and expiry > 0:
-        # Для безопасного режима — только класс A,
-        # очень редко допустим B, если уверенность выше 93
-        if sig_class == "A" or (sig_class == "B" and conf >= 93):
+    # ===== отправка в Telegram =====
+    if sig in ("BUY", "SELL") and conf >= effective_threshold and expiry > 0:
+        # Только классы A/B/A+
+        if trade_class in ("A+", "A", "B"):
             prev = st.session_state.last_sent.get(name, {})
+            should = True
             if ONLY_NEW and prev:
-                same = prev.get("signal") == sig
+                same_dir = prev.get("signal") == sig
                 worse = conf <= prev.get("conf", 0)
-                recent = (time.time() - prev.get("ts", 0)) < MIN_SEND_GAP_S
-                if same and (worse or recent):
-                    should_send = False
-                else:
-                    should_send = True
-            else:
-                should_send = True
+                recent = (time.time() - prev.get("ts", 0)) < min_gap
+                if same_dir and (worse or recent):
+                    should = False
+            if should:
+                send_telegram(name, symbol, mtype, sig, conf, trade_class, expiry, mtf)
+                st.session_state.last_sent[name] = {
+                    "signal": sig,
+                    "conf": conf,
+                    "ts": time.time(),
+                }
 
-    if should_send:
-        send_telegram(
-            pair_name=name,
-            pair_code=symbol,
-            signal=sig,
-            conf=conf,
-            sig_class=sig_class,
-            expiry=expiry,
-            feats=feats,
-            mtf=mtf,
-            mtype=mtype,
-        )
-        st.session_state.last_sent[name] = {
-            "signal": sig,
-            "conf": conf,
-            "ts": time.time(),
-        }
-
-# ===================== ТАБЛИЦА СИГНАЛОВ ==========================
+# ==================== TABLE ====================
 df_show = pd.DataFrame(
     rows,
     columns=[
@@ -619,8 +627,8 @@ df_show = pd.DataFrame(
         "Класс",
         "Экспирация (мин)",
         "Multi-TF",
-        "Режим рынка",
-        "Фаза свечи",
+        "Режим",
+        "Свеча (M5)",
     ],
 )
 
@@ -633,6 +641,32 @@ if len(df_show):
 st.subheader("📋 Таблица сигналов")
 st.dataframe(df_show, use_container_width=True, height=480)
 
-# ===================== АВТООБНОВЛЕНИЕ ============================
+# График по топ-паре
+if len(df_show):
+    top = df_show.iloc[0]
+    sym = PAIRS[top["Пара"]]
+    dfc = get_or_fake(sym, TF_M5[1], TF_M5[0])
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=dfc.index,
+                open=dfc["Open"],
+                high=dfc["High"],
+                low=dfc["Low"],
+                close=dfc["Close"],
+            )
+        ]
+    )
+    fig.update_layout(
+        height=380,
+        margin=dict(l=0, r=0, t=20, b=0),
+        title=(
+            f"Топ-пара: {top['Пара']} • {top['Сигнал']} "
+            f"({top['Уверенность']}%, {top['Класс']}) • {top['Multi-TF']}"
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# автообновление
 time.sleep(REFRESH_SEC)
 st.rerun()

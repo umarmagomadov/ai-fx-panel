@@ -26,10 +26,10 @@ CHAT_ID = st.secrets.get(
 
 # ==================== SETTINGS ====================
 
-REFRESH_SEC        = 1          # автообновление, сек (используем на стороне браузера)
-ONLY_NEW           = True       # не спамим одно и то же
-MIN_SEND_GAP_S     = 60         # пауза между сигналами по одной паре
-BASE_CONF_THRESHOLD = 70        # базовый порог уверенности
+REFRESH_SEC         = 1          # автообновление, сек (используем на стороне браузера)
+ONLY_NEW            = True       # не спамим одно и то же
+MIN_SEND_GAP_S      = 60         # пауза между сигналами по одной паре
+BASE_CONF_THRESHOLD = 70         # базовый порог уверенности
 
 # Режимы фильтра
 MODES = {
@@ -127,9 +127,11 @@ def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     Безопасный RSI.
     Не ломается, если данных мало или попадаются NaN.
     """
+    if series is None or len(series) == 0:
+        return pd.Series([], dtype=float)
 
-    # если данных мало
-    if series is None or len(series) < period + 1:
+    # если данных мало — просто 50 на всю длину
+    if len(series) < period + 1:
         return pd.Series([50.0] * len(series), index=series.index)
 
     delta = series.diff()
@@ -147,6 +149,81 @@ def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rsi = rsi.fillna(50)
 
     return rsi
+
+
+def calc_macd(series: pd.Series,
+              fast: int = 12,
+              slow: int = 26,
+              signal: int = 9):
+    """
+    Классический MACD, безопасный.
+    Возвращает (macd, сигнальная, гистограмма).
+    """
+    if series is None or len(series) == 0:
+        empty = pd.Series([], dtype=float)
+        return empty, empty, empty
+
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+
+    macd = ema_fast - ema_slow
+    sig = macd.ewm(span=signal, adjust=False).mean()
+    hist = macd - sig
+
+    macd = macd.fillna(0)
+    sig = sig.fillna(0)
+    hist = hist.fillna(0)
+
+    return macd, sig, hist
+
+
+def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Безопасный ADX.
+    Если данных мало — возвращает постоянное значение 20.
+    """
+    if df is None or df.empty:
+        return pd.Series([], dtype=float)
+
+    for col in ("high", "low", "close"):
+        if col not in df.columns:
+            # если нет нужных колонок — считаем рынок слаботрендовым
+            return pd.Series([20.0] * len(df), index=df.index)
+
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    if len(df) < period + 1:
+        return pd.Series([20.0] * len(df), index=df.index)
+
+    plus_dm = high.diff()
+    minus_dm = low.diff() * -1
+
+    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
+    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
+
+    plus_dm = pd.Series(plus_dm, index=high.index)
+    minus_dm = pd.Series(minus_dm, index=high.index)
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = tr.rolling(window=period, min_periods=period).mean()
+
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+
+    adx = adx.fillna(20.0)
+
+    return adx
+
+
 # ==================== ЛОГИКА СИГНАЛОВ ====================
 
 def analyze_tf(df: pd.DataFrame) -> dict:
@@ -393,7 +470,7 @@ rows = []
 # ==================== MAIN LOOP (один прогон) ====================
 
 for name, symbol in PAIRS.items():
-    # Загружаем 4 Tf
+    # Загружаем 4 TF
     df_m1  = get_or_fake(symbol, TF_M1)
     df_m5  = get_or_fake(symbol, TF_M5)
     df_m15 = get_or_fake(symbol, TF_M15)
@@ -487,3 +564,4 @@ st.caption(
     "При уверенности < 80% и классе C лучше пропускать сигнал. "
     "Уровень A — самые сильные точки входа по логике бота."
 )
+```0

@@ -556,7 +556,7 @@ def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
 
 # ==================== TELEGRAM ====================
 
-def def send_telegram(
+def send_telegram(
     pair_name: str,
     pair_code: str,
     signal: str,

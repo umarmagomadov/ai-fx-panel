@@ -1,13 +1,10 @@
-# ===================== AI FX Bot v4.0 =====================
+# ===================== AI FX Bot v4.1 PRO =====================
 # M1 + M5 + M15 + M30 + Telegram
-# Фильтр Safe / Normal / Hard / Ultra
-# Отправляет только самые сильные сигналы (класс A/B)
+# Многотаймфреймовый анализ, мощный фильтр, умная экспирация.
+# Бот — инструмент ДЛЯ ОБУЧЕНИЯ, не финсовет.
 
-import time
-import json
-import random
-import os
-from datetime import datetime, timezone
+import time, json, random, os
+from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
@@ -16,15 +13,23 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 
-# ==================== SECRETS =====================
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
-CHAT_ID        = st.secrets.get("CHAT_ID", "")
+# ==================== SECRETS ====================
+
+TELEGRAM_TOKEN = st.secrets.get(
+    "TELEGRAM_TOKEN",
+    os.getenv("TELEGRAM_TOKEN", "")
+)
+CHAT_ID = st.secrets.get(
+    "CHAT_ID",
+    os.getenv("CHAT_ID", "")
+)
 
 # ==================== SETTINGS ====================
-REFRESH_SEC       = 1       # автообновление
-ONLY_NEW          = True    # не спамим одинаковыми
-MIN_SEND_GAP_S    = 60      # пауза между сигналами по паре
-BASE_CONF_THRESH  = 70      # базовый минимум
+
+REFRESH_SEC        = 1          # автообновление, сек (используем на стороне браузера)
+ONLY_NEW           = True       # не спамим одно и то же
+MIN_SEND_GAP_S     = 60         # пауза между сигналами по одной паре
+BASE_CONF_THRESHOLD = 70        # базовый порог уверенности
 
 # Режимы фильтра
 MODES = {
@@ -41,8 +46,9 @@ TF_M15 = ("15m", "5d")
 TF_M30 = ("30m", "10d")
 
 # ==================== ИНСТРУМЕНТЫ ====================
+
 PAIRS = {
-    # Основные Forex
+    # Forex
     "EURUSD": "EURUSD=X",
     "GBPUSD": "GBPUSD=X",
     "USDJPY": "USDJPY=X",
@@ -52,567 +58,432 @@ PAIRS = {
     "USDCAD": "USDCAD=X",
     "EURJPY": "EURJPY=X",
     "GBPJPY": "GBPJPY=X",
-    "AUDJPY": "AUDJPY=X",
     "CADJPY": "CADJPY=X",
     "CHFJPY": "CHFJPY=X",
-    "EURGBP": "EURGBP=X",
     "EURAUD": "EURAUD=X",
+    "EURNZD": "EURNZD=X",
     "GBPAUD": "GBPAUD=X",
+    "GBPNZD": "GBPNZD=X",
 
-    # Немного OTC/крипты
-    "BTCUSD (Bitcoin)":  "BTC-USD",
+    # Crypto / индексы (PO любит)
+    "BTCUSD (Bitcoin)": "BTC-USD",
     "ETHUSD (Ethereum)": "ETH-USD",
+    "XAUUSD (Gold)": "XAUUSD=X",
+    "USOIL (Brent/WTI)": "BZ=F",
 }
 
-# ==================== ХЕЛПЕРЫ ====================
-def safe_float(x, default: float = 0.0) -> float:
-    try:
-        v = pd.to_numeric(x, errors="coerce")
-        if hasattr(v, "iloc"):
-            v = v.iloc[-1]
-        v = float(v)
-        if np.isnan(v):
-            return default
-        return v
-    except Exception:
-        return default
+# ==================== УТИЛИТЫ ====================
 
-
-def ema(s: pd.Series, n: int) -> pd.Series:
-    return s.ewm(span=n, adjust=False).mean()
-
-
-def rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    diff = close.diff()
-    up = diff.clip(lower=0).ewm(alpha=1/period, adjust=False).mean()
-    down = (-diff.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = up / (down + 1e-9)
-    return 100 - (100 / (1 + rs))
-
-
-def macd(close: pd.Series, fast=12, slow=26, signal=9):
-    m = ema(close, fast) - ema(close, slow)
-    s = ema(m, signal)
-    return m, s, m - s
-
-
-def bbands(close: pd.Series, n=20, k=2.0):
-    ma = close.rolling(n).mean()
-    sd = close.rolling(n).std()
-    up = ma + k * sd
-    lo = ma - k * sd
-    width = (up - lo) / (ma + 1e-9) * 100
-    return up, ma, lo, width
-
-
-def adx(df: pd.DataFrame, n=14) -> pd.Series:
-    h = df["High"]
-    l = df["Low"]
-    c = df["Close"]
-    up_move  = h.diff()
-    dn_move  = -l.diff()
-    plus_dm  = up_move.where((up_move > 0) & (up_move > dn_move), 0.0).fillna(0)
-    minus_dm = dn_move.where((dn_move > 0) & (dn_move > up_move), 0.0).fillna(0)
-    tr = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(n).mean()
-    plus_di  = 100 * (plus_dm.rolling(n).sum()  / (atr + 1e-9))
-    minus_di = 100 * (minus_dm.rolling(n).sum() / (atr + 1e-9))
-    dx = 100 * ((plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-9))
-    return dx.rolling(n).mean()
-
-
-def boll_width(close: pd.Series, n=20, k=2.0) -> float:
-    ma = close.rolling(n).mean()
-    sd = close.rolling(n).std()
-    up = ma + k * sd
-    lo = ma - k * sd
-    return safe_float(((up.iloc[-1] - lo.iloc[-1]) / (ma.iloc[-1] + 1e-9)) * 100)
-
-
-def candle_phase(df: pd.DataFrame) -> str:
-    last = df.iloc[-1]
-    o = safe_float(last["Open"])
-    h = safe_float(last["High"])
-    l = safe_float(last["Low"])
-    c = safe_float(last["Close"])
-    rng = max(1e-9, h - l)
-    pos = (c - l) / rng
-    if pos < 0.33:
-        return "start"
-    if pos < 0.66:
-        return "mid"
-    return "end"
-
-
-def near_sr(df: pd.DataFrame) -> str | None:
-    close = df["Close"]
-    last_close = safe_float(close.iloc[-1])
-    sup = safe_float(df["Low"].rolling(40).min().iloc[-1])
-    res = safe_float(df["High"].rolling(40).max().iloc[-1])
-    if abs(last_close - sup) / max(1e-9, last_close) < 0.002:
-        return "support"
-    if abs(last_close - res) / max(1e-9, last_close) < 0.002:
-        return "resistance"
-    return None
-
-
-def momentum_spike(df: pd.DataFrame) -> bool:
-    if df is None or len(df) < 12:
-        return False
-    close = df["Close"]
-    last_move = abs(safe_float(close.iloc[-1]) - safe_float(close.iloc[-2]))
-    avg_raw = close.diff().abs().rolling(10).mean().iloc[-1]
-    avg_move = safe_float(avg_raw, 0.0)
-    if avg_move == 0.0:
-        return False
-    return bool(last_move > 1.5 * avg_move)
-
-
-def market_regime(adx_val: float, bw: float) -> str:
-    if adx_val < 18 and bw < 3.0:
-        return "flat"
-    if adx_val > 28 and bw < 7.0:
-        return "trend"
-    return "impulse"
-
-
-def is_otc(name: str, symbol: str) -> bool:
-    n = name.lower()
-    if "otc" in n:
-        return True
-    if "=f" in symbol.lower():
-        return True
-    if "-" in symbol:
-        return True
-    return False
-
-
-def pocket_code(name: str, symbol: str) -> str:
-    if symbol.endswith("=X") and len(symbol) >= 7:
-        base = symbol.replace("=X", "")
-        if len(base) == 6:
-            return f"{base[:3]}/{base[3:]}"
-    if symbol.endswith("-USD"):
-        return symbol.replace("-USD", "/USD")
-    clean = "".join(ch for ch in name if ch.isalnum() or ch in "/").upper()
-    return clean
-
-# ==================== DATA ====================
-def _cache_key(symbol: str, interval: str) -> str:
-    return f"{symbol}__{interval}"
-
-
-def safe_download(symbol: str, period: str, interval: str) -> pd.DataFrame | None:
+@st.cache_data(show_spinner=False)
+def load_history(symbol: str, interval: str, period: str) -> pd.DataFrame:
+    """Загрузка истории через yfinance с кэшем."""
     try:
         df = yf.download(
             symbol,
-            period=period,
             interval=interval,
-            auto_adjust=True,
+            period=period,
+            auto_adjust=False,
             progress=False,
         )
-        if df is None or len(df) < 40:
-            return None
-        df = df[["Open", "High", "Low", "Close"]].copy()
-        return df.tail(600)
+        if df.empty:
+            return pd.DataFrame()
+        df = df.rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
+        )
+        return df.dropna()
     except Exception:
-        return None
+        return pd.DataFrame()
 
 
-def nudge_last(df: pd.DataFrame, max_bps: float = 5) -> pd.Series:
-    last = df.iloc[-1].copy()
-    c = safe_float(last["Close"], 1.0)
-    bps = random.uniform(-max_bps, max_bps) / 10000.0
-    new_c = max(1e-9, c * (1 + bps))
-    last["Open"] = c
-    last["High"] = max(c, new_c)
-    last["Low"]  = min(c, new_c)
-    last["Close"] = new_c
-    last.name = last.name + pd.tseries.frequencies.to_offset("1min")
-    return last
-
-
-def get_or_fake(symbol: str, period: str, interval: str) -> pd.DataFrame:
-    if "cache" not in st.session_state:
-        st.session_state.cache = {}
-    key = _cache_key(symbol, interval)
-
-    real = safe_download(symbol, period, interval)
-    if real is not None:
-        st.session_state.cache[key] = real.copy()
-        return real
-
-    cached = st.session_state.cache.get(key)
-    if cached is not None and len(cached):
-        df = cached.copy()
-        last = nudge_last(df)
-        if isinstance(last, pd.Series):
-            last = last.to_frame().T
-        df = pd.concat([df, last], axis=0).tail(600)
-        st.session_state.cache[key] = df
-        return df
-
-    idx = pd.date_range(end=datetime.now(timezone.utc), periods=60, freq="1min")
-    base = 1.0 + random.random() / 10
-    vals = base * (1 + np.cumsum(np.random.randn(60)) / 100)
-    df = pd.DataFrame(
-        {"Open": vals, "High": vals, "Low": vals, "Close": vals},
-        index=idx,
-    )
-    st.session_state.cache[key] = df
+def get_or_fake(symbol: str, tf: tuple) -> pd.DataFrame:
+    """Получаем реальный tf, если не вышло — делаем фейковый FLAT."""
+    interval, period = tf
+    df = load_history(symbol, interval, period)
+    if df.empty:
+        now = datetime.now(timezone.utc)
+        return pd.DataFrame(
+            {
+                "open": [1.0],
+                "high": [1.0],
+                "low":  [1.0],
+                "close": [1.0],
+                "volume": [0],
+            },
+            index=[now],
+        )
     return df
 
-# ==================== SCORING ====================
-def score_tf(df: pd.DataFrame) -> tuple[str, int, dict]:
-    """
-    Оценка направления по одному ТФ.
-    Возвращает: direction(BUY/SELL/FLAT), confidence(0-100), features.
-    """
-    if df is None or len(df) < 40:
-        return "FLAT", 0, {
-            "RSI": 50.0,
-            "ADX": 0.0,
-            "MACD_Hist": 0.0,
-            "BB_Width": 0.0,
-        }
 
-    close = df["Close"]
+# ==================== ИНДИКАТОРЫ ====================
 
-    rsi_series = rsi(close)
-    rsv = safe_float(rsi_series.iloc[-1], 50.0)
-    rsv_prev = safe_float(rsi_series.iloc[-2], rsv) if len(rsi_series) > 2 else rsv
+def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = np.clip(delta, 0, None)
+    loss = np.clip(-delta, 0, None)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / (avg_loss + 1e-9)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-    ema9  = safe_float(ema(close, 9).iloc[-1], rsv)
-    ema21 = safe_float(ema(close, 21).iloc[-1], rsv)
-    ema200 = safe_float(ema(close, 200).iloc[-1], rsv)
 
-    _, _, mh = macd(close)
-    mhv = safe_float(mh.iloc[-1], 0.0)
+def calc_macd(series: pd.Series):
+    fast = series.ewm(span=12, adjust=False).mean()
+    slow = series.ewm(span=26, adjust=False).mean()
+    macd = fast - slow
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    return macd, signal, hist
 
-    up, mid, lo, w = bbands(close)
-    bb_width = safe_float(w.iloc[-1], 0.0)
-    bb_pos = safe_float(
-        (close.iloc[-1] - mid.iloc[-1]) /
-        (up.iloc[-1] - lo.iloc[-1] + 1e-9),
-        0.0,
-    )
 
-    adx_series = adx(df)
-    adx_v = safe_float(adx_series.iloc[-1], 0.0)
+def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high, low, close = df["high"], df["low"], df["close"]
+    plus_dm = high.diff()
+    minus_dm = low.diff() * -1
 
-    vu = 0
-    vd = 0
+    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
+    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
 
-    if rsv < 35:
-        vu += 1
-    if rsv > 65:
-        vd += 1
-    if ema9 > ema21:
-        vu += 1
-    if ema9 < ema21:
-        vd += 1
-    if mhv > 0:
-        vu += 1
-    if mhv < 0:
-        vd += 1
-    if bb_pos < -0.25:
-        vu += 1
-    if bb_pos > 0.25:
-        vd += 1
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-    if vu == vd:
-        direction = "FLAT"
-    elif vu > vd:
-        direction = "BUY"
+    atr = tr.rolling(period).mean()
+    plus_di = 100 * (pd.Series(plus_dm).rolling(period).sum() / (atr + 1e-9))
+    minus_di = 100 * (pd.Series(minus_dm).rolling(period).sum() / (atr + 1e-9))
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
+    adx = dx.rolling(period).mean()
+    return adx
+
+
+# ==================== ЛОГИКА СИГНАЛОВ ====================
+
+def analyze_tf(df: pd.DataFrame) -> dict:
+    """Сигнал по одному tf."""
+    close = df["close"]
+    rsi = calc_rsi(close)
+    macd, sig, hist = calc_macd(close)
+    adx = calc_adx(df)
+
+    last = df.index[-1]
+    rsi_v = rsi.iloc[-1]
+    macd_v = macd.iloc[-1]
+    sig_v = sig.iloc[-1]
+    hist_v = hist.iloc[-1]
+    adx_v = adx.iloc[-1]
+
+    # Направление
+    if rsi_v > 60 and macd_v > sig_v and hist_v > 0:
+        signal = "BUY"
+    elif rsi_v < 40 and macd_v < sig_v and hist_v < 0:
+        signal = "SELL"
     else:
-        direction = "SELL"
+        signal = "FLAT"
 
-    raw = abs(vu - vd) / 4.0
-    trend_boost = min(max((adx_v - 18) / 25, 0), 1)
-    conf = int(100 * (0.55 * raw + 0.45 * trend_boost))
-    conf = max(0, min(99, conf))
+    # Режим рынка по ADX
+    if adx_v >= 25:
+        regime = "trend"
+    else:
+        regime = "flat"
 
-    feats = {
-        "RSI": round(rsv, 1),
-        "RSI_prev": round(rsv_prev, 1),
-        "ADX": round(adx_v, 1),
-        "MACD_Hist": round(mhv, 6),
-        "BB_Width": round(bb_width, 2),
-        "BB_Pos": round(bb_pos, 3),
-        "EMA9-21": round(ema9 - ema21, 6),
-        "EMA200": round(ema200, 6),
+    return {
+        "time": last,
+        "signal": signal,
+        "RSI": float(rsi_v),
+        "MACD": float(macd_v),
+        "MACD_sig": float(sig_v),
+        "MACD_hist": float(hist_v),
+        "ADX": float(adx_v),
+        "Regime": regime,
     }
-    return direction, conf, feats
 
 
-def combine_multi_tf(df_m1, df_m5, df_m15, df_m30) -> tuple[str, int, str, dict]:
-    """
-    Объединение 4 таймфреймов.
-    Возвращает: signal(BUY/SELL/FLAT), conf, class(A+/A/B/C),
-    а также dict с описанием по ТФ.
-    """
-    d1, c1, f1 = score_tf(df_m1)
-    d5, c5, f5 = score_tf(df_m5)
-    d15, c15, f15 = score_tf(df_m15)
-    d30, c30, f30 = score_tf(df_m30)
+def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
+    """Комбинируем 4 таймфрейма → один мощный сигнал + уверенность."""
+    signals = [m1_info["signal"], m5_info["signal"],
+               m15_info["signal"], m30_info["signal"]]
 
-    dirs = [d1, d5, d15, d30]
-    confs = [c1, c5, c15, c30]
+    # Переводим в голоса
+    buy_votes = signals.count("BUY")
+    sell_votes = signals.count("SELL")
 
-    # Требуем явное направление (нет FLAT и нет смешения BUY/SELL)
-    if any(d == "FLAT" for d in dirs):
-        return "FLAT", 0, "C", {
-            "M1": d1, "M5": d5, "M15": d15, "M30": d30,
-            "Conf": confs,
-        }
+    if buy_votes == 0 and sell_votes == 0:
+        final_signal = "FLAT"
+    elif buy_votes > sell_votes:
+        final_signal = "BUY"
+    elif sell_votes > buy_votes:
+        final_signal = "SELL"
+    else:
+        final_signal = "FLAT"
 
-    if len(set(dirs)) != 1:
-        # нет единства -> пропускаем
-        return "FLAT", 0, "C", {
-            "M1": d1, "M5": d5, "M15": d15, "M30": d30,
-            "Conf": confs,
-        }
+    # Уверенность
+    conf = 50  # база
+    conf += 10 * max(buy_votes, sell_votes)  # чем больше совпадений, тем лучше
 
-    signal = dirs[0]
+    # Усиливаем за тренд по старшим tf
+    regimes = [m5_info["Regime"], m15_info["Regime"], m30_info["Regime"]]
+    trend_votes = regimes.count("trend")
+    if trend_votes >= 2:
+        conf += 10
 
-    # Взвешенная уверенность (старшие ТФ важнее)
-    weights = np.array([1.0, 1.5, 2.0, 2.5])
-    base_conf = int(np.average(confs, weights=weights))
-
-    # Доп.фильтры по старшему ТФ (M30)
-    bw = boll_width(df_m30["Close"])
-    adx_series = adx(df_m30)
-    adx_v = safe_float(adx_series.iloc[-1], 0.0)
-    regime = market_regime(adx_v, bw)
-
-    phase = candle_phase(df_m5)
-    sr = near_sr(df_m30)
-    spike = momentum_spike(df_m1)
-
-    conf = base_conf
-
-    # усиливаем тренд
-    if regime == "trend":
-        conf += 8
-    elif regime == "impulse":
-        conf += 4
-    else:  # flat
+    # Проверяем RSI по старшим tf
+    avg_rsi = (m5_info["RSI"] + m15_info["RSI"] + m30_info["RSI"]) / 3
+    if final_signal == "BUY" and avg_rsi < 55:
         conf -= 10
-
-    # поддержка / сопротивление
-    if signal == "BUY" and sr == "support":
-        conf += 5
-    if signal == "SELL" and sr == "resistance":
-        conf += 5
-
-    # импульс на M1
-    if spike:
-        conf += 4
-
-    # фазa свечи на M5
-    if phase == "mid":
-        conf += 3
-    elif phase == "end":
-        conf -= 4
+    if final_signal == "SELL" and avg_rsi > 45:
+        conf -= 10
 
     conf = int(max(0, min(100, conf)))
 
-    # Классификация
-    if conf >= 96:
-        trade_class = "A+"
-    elif conf >= 90:
+    # Класс сигнала
+    if conf >= 90:
         trade_class = "A"
-    elif conf >= 85:
+    elif conf >= 80:
         trade_class = "B"
     else:
         trade_class = "C"
 
+    # Режим/фаза для инфо
+    regime = "trend" if trend_votes >= 2 else "flat"
+    phase = "start" if avg_rsi < 45 or avg_rsi > 55 else "mid"
+
+    # Детальная инфа для таблицы/телеги
     info = {
-        "M1": d1,
-        "M5": d5,
-        "M15": d15,
-        "M30": d30,
-        "Conf_M1": c1,
-        "Conf_M5": c5,
-        "Conf_M15": c15,
-        "Conf_M30": c30,
+        "M1":  m1_info["signal"],
+        "M5":  m5_info["signal"],
+        "M15": m15_info["signal"],
+        "M30": m30_info["signal"],
+        "Conf_M1":  conf,
+        "Conf_M5":  conf,
+        "Conf_M15": conf,
+        "Conf_M30": conf,
         "Regime": regime,
         "Phase": phase,
-        "BW": round(bw, 2),
-        "ADX30": round(adx_v, 1),
+        "BW": abs(m30_info["RSI"] - 50),  # грубый "bandwidth" тренда
+        "ADX30": m30_info["ADX"],
     }
-    return signal, conf, trade_class, info
+
+    return final_signal, conf, trade_class, info
 
 
-def choose_expiry(conf, *args):
+# ==================== ЭКСПИРАЦИЯ ====================
+
+def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
     """
-    Безошибочная версия. Работает даже если нет M1/M5/M15/M30.
+    Умная экспирация, БЕЗ KeyError.
+    Никаких обращений к mtf['xxx'] внутри — только значения, которые передали.
+    Возвращает минуты (1–30).
     """
+    # 1) сильные сигналы → короткая экспирация (2–3 минуты)
+    if conf >= 95:
+        base = 2
+    elif conf >= 90:
+        base = 3
+    elif conf >= 85:
+        base = 4
+    elif conf >= 80:
+        base = 5
+    else:
+        base = 0  # слишком слабый, можно вообще не торговать
 
-    # если уверенность высокая → 2–3 минуты
-    if conf >= 90:
-        return 2
-    if conf >= 80:
-        return 1
+    # 2) тренд → держим дольше
+    if regime == "trend":
+        base += 2
+    elif regime == "flat":
+        base -= 1
 
-    # если мало данных по таймфреймам → ставим 1 минуту
-    if not args or all(a is None for a in args):
-        return 1
+    # 3) фаза (начало/конец движения)
+    if phase == "start":
+        base += 1
+    elif phase == "end":
+        base -= 1
 
-    # если есть движухи → 1 минута
-    for val in args:
-        if val and abs(val) > 0.3:
-            return 1
+    if base <= 0:
+        return 0
+    return int(max(1, min(30, base)))
 
-    # иначе → 2 минуты
-    return 2
 
 # ==================== TELEGRAM ====================
-def send_telegram(pair_name: str, pair_code: str, mtype: str,
-                  signal: str, conf: int, trade_class: str,
-                  expiry: int, mtf: dict) -> None:
+
+def send_telegram(pair_name: str,
+                  pair_code: str,
+                  signal: str,
+                  conf: int,
+                  expiry: int,
+                  mtype: str,
+                  info: dict) -> None:
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
-    arrow = "⬆️" if signal == "BUY" else "⬇️"
-    copy_code = pocket_code(pair_name, pair_code)
+    arrow = "🟢" if signal == "BUY" else ("🔴" if signal == "SELL" else "⚪️")
 
-    phase_map = {
-        "start": "🟢 начало",
-        "mid": "🟡 середина",
-        "end": "🔴 конец",
-    }
-    phase_txt = phase_map.get(mtf.get("Phase", ""), "❔")
-
-    if conf < 80:
-        strength = "🔴 слабый"
-    elif conf < 90:
-        strength = "🟡 нормальный"
-    else:
-        strength = "🟢 сильный"
-
-    text = (
-        "🤖 AI FX Signal Bot v4.0\n"
-        f"💱 Пара: {pair_name}\n"
-        f"📌 Код для Pocket: {copy_code}\n"
-        f"🏷️ Тип: {mtype}\n"
-        f"{arrow} Сигнал: *{signal}* (класс {trade_class})\n"
-        f"🇲🇫 Multi-TF: M1={mtf['M1']} | M5={mtf['M5']} | "
-        f"M15={mtf['M15']} | M30={mtf['M30']}\n"
-        f"🌐 Рынок: {mtf['Regime']} | 🕯️ Свеча: {phase_txt}\n"
-        f"💪 Уверенность: *{conf}%* ({strength})\n"
-        f"⏱ Экспирация: *{expiry} мин*\n"
-        f"📊 ADX30={mtf['ADX30']} | BW={mtf['BW']}%\n"
-        f"⏰ {datetime.utcnow().strftime('%H:%M:%S')} UTC"
+    multi_str = (
+        f"M1={info.get('M1','?')} | "
+        f"M5={info.get('M5','?')} | "
+        f"M15={info.get('M15','?')} | "
+        f"M30={info.get('M30','?')}"
     )
 
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
-    except Exception as e:
-        st.toast(f"Telegram error: {e}", icon="⚠️")
+    text = (
+        f"🤖 AI FX Signal Bot v4.1 PRO\n"
+        f"📌 Пара: {pair_name}\n"
+        f"📊 Код для Pocket: {pair_code}\n"
+        f"🏷 Тип: {mtype}\n"
+        f"{arrow} Сигнал: {signal}\n\n"
+        f"📉 Мульти-TF: {multi_str}\n"
+        f"📈 Уверенность: {conf}%\n"
+        f"⏱ Экспирация: {expiry} мин\n"
+        f"🌍 Режим: {info.get('Regime','-')} | Фаза: {info.get('Phase','-')}\n"
+        f"ADX30: {round(info.get('ADX30',0),2)}\n"
+        f"❗ Бот для обучения. Не финсовет."
+    )
 
-# ==================== STREAMLIT UI ====================
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception:
+        pass
+
+
+# ==================== UI ====================
+
 st.set_page_config(
-    page_title="AI FX Bot v4.0 — M1+M5+M15+M30 + Telegram",
+    page_title="AI FX Bot v4.1 — M1+M5+M15+M30 + Telegram",
     layout="wide",
 )
 
-st.title("🤖 AI FX Bot v4.0 — M1+M5+M15+M30 + Telegram")
-st.caption(
-    "Режимы Safe/Normal/Hard/Ultra — это стиль фильтра, а не реальная гарантия. "
-    "Бот — инструмент для обучения, не финсовет."
-)
-
-col_mode, col_conf, col_gap = st.columns([1, 1, 1])
-
-with col_mode:
-    mode_name = st.selectbox("Режим отбора сигналов", list(MODES.keys()), index=0)
-
-with col_conf:
-    user_conf = st.slider(
-        "Минимальная уверенность (%) для сигнала",
-        50, 99, 85,
-        help="Минимум для попадания в таблицу. Для Telegram используется максимум из этого и режима.",
-    )
-
-with col_gap:
-    min_gap = st.number_input(
-        "Пауза между сигналами по паре (сек)",
-        10, 600, MIN_SEND_GAP_S,
-    )
-
-effective_threshold = max(user_conf, MODES[mode_name])
+st.title("AI FX Bot v4.1 PRO — M1+M5+M15+M30 + Telegram")
 
 st.markdown(
-    f"**Текущий рабочий порог для отправки сигналов в Telegram:** {effective_threshold}%"
+    "Режимы **Safe / Normal / Hard / Ultra** — это стиль фильтра, а не гарантия. "
+    "Бот — инструмент для обучения, не финансовый совет."
 )
 
+col1, col2 = st.columns(2)
+
+with col1:
+    mode_name = st.selectbox("Режим отбора сигналов", list(MODES.keys()), index=0)
+
+with col2:
+    min_conf_slider = st.slider(
+        "Минимальная уверенность (%) для сигнала",
+        min_value=50,
+        max_value=99,
+        value=85,
+    )
+
+gap_input = st.number_input(
+    "Пауза между сигналами по паре (сек)",
+    min_value=10,
+    max_value=3600,
+    value=MIN_SEND_GAP_S,
+    step=10,
+)
+MIN_SEND_GAP_S = int(gap_input)
+
+work_threshold = max(MODES[mode_name], min_conf_slider)
+
+st.markdown(
+    f"**Текущий рабочий порог для отправки сигналов в Telegram: {work_threshold}%**"
+)
+
+# ==================== CЕССИЯ ====================
+
 if "last_sent" not in st.session_state:
-    st.session_state.last_sent = {}
+    st.session_state.last_sent = {}  # pair_name → timestamp
 
 rows = []
 
-# ==================== MAIN LOOP ====================
+# ==================== MAIN LOOP (один прогон) ====================
+
 for name, symbol in PAIRS.items():
-    df_m1  = get_or_fake(symbol, TF_M1[1],  TF_M1[0])
-    df_m5  = get_or_fake(symbol, TF_M5[1],  TF_M5[0])
-    df_m15 = get_or_fake(symbol, TF_M15[1], TF_M15[0])
-    df_m30 = get_or_fake(symbol, TF_M30[1], TF_M30[0])
+    # Загружаем 4 Tf
+    df_m1  = get_or_fake(symbol, TF_M1)
+    df_m5  = get_or_fake(symbol, TF_M5)
+    df_m15 = get_or_fake(symbol, TF_M15)
+    df_m30 = get_or_fake(symbol, TF_M30)
 
-    sig, conf, trade_class, mtf = combine_multi_tf(df_m1, df_m5, df_m15, df_m30)
+    # Анализ по каждому TF
+    info_m1  = analyze_tf(df_m1)
+    info_m5  = analyze_tf(df_m5)
+    info_m15 = analyze_tf(df_m15)
+    info_m30 = analyze_tf(df_m30)
 
-    otc_flag = is_otc(name, symbol)
-    mtype = "OTC/24/7" if otc_flag else "Биржевая"
-
-    expiry = choose_expiry(conf, mtf["Regime"], mtf["Phase"])
-    if otc_flag and expiry > 0:
-        expiry = min(60, expiry + 3)
-
-    multi_str = (
-        f"M1={mtf['M1']}({mtf['Conf_M1']}) | "
-        f"M5={mtf['M5']}({mtf['Conf_M5']}) | "
-        f"M15={mtf['M15']}({mtf['Conf_M15']}) | "
-        f"M30={mtf['M30']}({mtf['Conf_M30']})"
+    signal, conf, trade_class, mtf_info = combine_multi_tf(
+        info_m1, info_m5, info_m15, info_m30
     )
 
-    rows.append([
-        name,
-        mtype,
-        sig,
-        conf,
-        trade_class,
-        expiry,
-        multi_str,
-        mtf["Regime"],
-        mtf["Phase"],
-    ])
+    # Тип рынка (OTC/Биржа) — пока грубо: крипта и нефть → OTC/24/7
+    if "BTC" in name or "ETH" in name or "OIL" in name:
+        mtype = "OTC/24/7"
+    else:
+        mtype = "Биржевая"
 
-    # ===== отправка в Telegram =====
-    if sig in ("BUY", "SELL") and conf >= effective_threshold and expiry > 0:
-        # Только классы A/B/A+
-        if trade_class in ("A+", "A", "B"):
-            prev = st.session_state.last_sent.get(name, {})
-            should = True
-            if ONLY_NEW and prev:
-                same_dir = prev.get("signal") == sig
-                worse = conf <= prev.get("conf", 0)
-                recent = (time.time() - prev.get("ts", 0)) < min_gap
-                if same_dir and (worse or recent):
-                    should = False
-            if should:
-                send_telegram(name, symbol, mtype, sig, conf, trade_class, expiry, mtf)
-                st.session_state.last_sent[name] = {
-                    "signal": sig,
-                    "conf": conf,
-                    "ts": time.time(),
-                }
+    regime = mtf_info.get("Regime")
+    phase = mtf_info.get("Phase")
+    expiry = choose_expiry(conf, regime, phase)
 
-# ==================== TABLE ====================
-df_show = pd.DataFrame(
+    # Строка мульти-TF для таблицы
+    multi_str = (
+        f"M1={mtf_info['M1']} | "
+        f"M5={mtf_info['M5']} | "
+        f"M15={mtf_info['M15']} | "
+        f"M30={mtf_info['M30']}"
+    )
+
+    # Для таблицы в интерфейсе
+    rows.append(
+        [
+            name,
+            mtype,
+            signal,
+            conf,
+            trade_class,
+            expiry,
+            multi_str,
+            round(mtf_info["ADX30"], 2),
+        ]
+    )
+
+    # ====== Отправка в Telegram ======
+    now_ts = time.time()
+    last_ts = st.session_state.last_sent.get(name, 0)
+    can_send = (
+        signal in ("BUY", "SELL")
+        and conf >= work_threshold
+        and expiry > 0
+        and (now_ts - last_ts) >= MIN_SEND_GAP_S
+    )
+
+    if can_send:
+        send_telegram(
+            pair_name=name,
+            pair_code=name.replace(" ", "").split("(")[0],
+            signal=signal,
+            conf=conf,
+            expiry=expiry,
+            mtype=mtype,
+            info=mtf_info,
+        )
+        st.session_state.last_sent[name] = now_ts
+
+# ==================== ТАБЛИЦА СИГНАЛОВ ====================
+
+st.markdown("## 📋 Таблица сигналов")
+
+df_signals = pd.DataFrame(
     rows,
     columns=[
         "Пара",
@@ -622,46 +493,13 @@ df_show = pd.DataFrame(
         "Класс",
         "Экспирация (мин)",
         "Multi-TF",
-        "Режим",
-        "Свеча (M5)",
+        "ADX30",
     ],
 )
 
-if len(df_show):
-    df_show = df_show.sort_values(
-        ["Класс", "Уверенность"],
-        ascending=[True, False]
-    ).reset_index(drop=True)
+st.dataframe(df_signals, use_container_width=True)
 
-st.subheader("📋 Таблица сигналов")
-st.dataframe(df_show, use_container_width=True, height=480)
-
-# График по топ-паре
-if len(df_show):
-    top = df_show.iloc[0]
-    sym = PAIRS[top["Пара"]]
-    dfc = get_or_fake(sym, TF_M5[1], TF_M5[0])
-    fig = go.Figure(
-        data=[
-            go.Candlestick(
-                x=dfc.index,
-                open=dfc["Open"],
-                high=dfc["High"],
-                low=dfc["Low"],
-                close=dfc["Close"],
-            )
-        ]
-    )
-    fig.update_layout(
-        height=380,
-        margin=dict(l=0, r=0, t=20, b=0),
-        title=(
-            f"Топ-пара: {top['Пара']} • {top['Сигнал']} "
-            f"({top['Уверенность']}%, {top['Класс']}) • {top['Multi-TF']}"
-        ),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-# автообновление
-time.sleep(REFRESH_SEC)
-st.rerun()
+st.caption(
+    "При уверенности < 80% и классе C лучше пропускать сигнал. "
+    "Уровень A — самые сильные точки входа по логике бота."
+)

@@ -6,7 +6,11 @@ import time
 import json
 import random
 from datetime import datetime, timezone
+import streamlit as st
 
+st.title("Тест Streamlit работает ✔️")
+
+st.write("Если ты видишь этот текст — приложение загружается нормально.")
 import numpy as np
 import pandas as pd
 import yfinance as yf

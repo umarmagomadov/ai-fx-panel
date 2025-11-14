@@ -129,6 +129,7 @@ def calc_macd(series):
     signal = macd.ewm(span=9, adjust=False).mean()
     hist = macd - signal
     return macd, signal, hist
+
 def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Безопасный ADX — всегда 1-D, без ошибок."""
     if df is None or len(df) < period + 2:
@@ -163,7 +164,6 @@ def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     adx = dx.rolling(period).mean().fillna(20.0)
 
     return adx
-
 
 def analyze_tf(df):
     close = df["close"]

@@ -1,6 +1,1 @@
-yfinance==0.2.43
-pandas
-numpy
-plotly
 streamlit
-requests

@@ -129,7 +129,40 @@ def calc_macd(series):
     signal = macd.ewm(span=9, adjust=False).mean()
     hist = macd - signal
     return macd, signal, hist
+def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Безопасный ADX — всегда 1-D, без ошибок."""
+    if df is None or len(df) < period + 2:
+        return pd.Series([20.0] * len(df), index=df.index)
 
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    up = high.diff()
+    down = -low.diff()
+
+    plus_dm_raw = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm_raw = np.where((down > up) & (down > 0), down, 0.0)
+
+    plus_dm = pd.Series(plus_dm_raw, index=df.index)
+    minus_dm = pd.Series(minus_dm_raw, index=df.index)
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = tr.rolling(window=period).mean()
+
+    plus_di = 100 * (plus_dm.rolling(period).sum() / atr)
+    minus_di = 100 * (minus_dm.rolling(period).sum() / atr)
+
+    denom = (plus_di + minus_di).replace(0, np.nan)
+    dx = ((plus_di - minus_di).abs() / denom) * 100
+
+    adx = dx.rolling(period).mean().fillna(20.0)
+
+    return adx
 
 
 def analyze_tf(df):

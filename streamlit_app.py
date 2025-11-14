@@ -122,46 +122,50 @@ def get_or_fake(symbol: str, tf: tuple) -> pd.DataFrame:
 
 # ==================== ИНДИКАТОРЫ ====================
 
-def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = np.clip(delta, 0, None)
-    loss = np.clip(-delta, 0, None)
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / (avg_loss + 1e-9)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-
-def calc_macd(series: pd.Series):
-    fast = series.ewm(span=12, adjust=False).mean()
-    slow = series.ewm(span=26, adjust=False).mean()
-    macd = fast - slow
-    signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal
-    return macd, signal, hist
-
-
 def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    high, low, close = df["high"], df["low"], df["close"]
+    """
+    Упрощённый и безопасный расчёт ADX.
+    Всегда возвращает 1-мерный Series, чтобы не было ValueError.
+    """
+
+    # если данных мало — возвращаем нули
+    if df is None or df.empty or len(df) < period + 1:
+        return pd.Series([0.0] * len(df), index=df.index)
+
+    # берём только нужные столбцы и приводим к float
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+
+    # направленные движения
     plus_dm = high.diff()
-    minus_dm = low.diff() * -1
+    minus_dm = -low.diff()
 
-    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
-    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
 
-    tr1 = high - low
+    # истинный диапазон
+    tr1 = (high - low)
     tr2 = (high - close.shift()).abs()
     tr3 = (low - close.shift()).abs()
+
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
     atr = tr.rolling(period).mean()
-    plus_di = 100 * (pd.Series(plus_dm).rolling(period).sum() / (atr + 1e-9))
-    minus_di = 100 * (pd.Series(minus_dm).rolling(period).sum() / (atr + 1e-9))
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
-    adx = dx.rolling(period).mean()
-    return adx
 
+    # защищаемся от деления на ноль
+    atr = atr.replace(0, np.nan)
+
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+
+    denom = (plus_di + minus_di).replace(0, np.nan)
+    dx = (plus_di - minus_di).abs() / denom * 100
+
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+    adx = adx.fillna(0)
+
+    return adx
 
 # ==================== ЛОГИКА СИГНАЛОВ ====================
 

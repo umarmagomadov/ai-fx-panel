@@ -122,51 +122,31 @@ def get_or_fake(symbol: str, tf: tuple) -> pd.DataFrame:
 
 # ==================== ИНДИКАТОРЫ ====================
 
-def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     """
-    Упрощённый и безопасный расчёт ADX.
-    Всегда возвращает 1-мерный Series, чтобы не было ValueError.
+    Безопасный RSI.
+    Не ломается, если данных мало или попадаются NaN.
     """
 
-    # если данных мало — возвращаем нули
-    if df is None or df.empty or len(df) < period + 1:
-        return pd.Series([0.0] * len(df), index=df.index)
+    # если данных мало
+    if series is None or len(series) < period + 1:
+        return pd.Series([50.0] * len(series), index=series.index)
 
-    # берём только нужные столбцы и приводим к float
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    close = df["close"].astype(float)
+    delta = series.diff()
 
-    # направленные движения
-    plus_dm = high.diff()
-    minus_dm = -low.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
 
-    # истинный диапазон
-    tr1 = (high - low)
-    tr2 = (high - close.shift()).abs()
-    tr3 = (low - close.shift()).abs()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
 
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    # все NaN → заменяем средним значением
+    rsi = rsi.fillna(50)
 
-    atr = tr.rolling(period).mean()
-
-    # защищаемся от деления на ноль
-    atr = atr.replace(0, np.nan)
-
-    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
-    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
-
-    denom = (plus_di + minus_di).replace(0, np.nan)
-    dx = (plus_di - minus_di).abs() / denom * 100
-
-    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
-    adx = adx.fillna(0)
-
-    return adx
-
+    return rsi
 # ==================== ЛОГИКА СИГНАЛОВ ====================
 
 def analyze_tf(df: pd.DataFrame) -> dict:

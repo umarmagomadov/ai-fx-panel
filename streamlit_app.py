@@ -3,8 +3,9 @@ import pandas as pd
 import yfinance as yf
 import requests
 import os
+import time
 
-# ===================== TELEGRAM ======================
+# ========= TELEGRAM ==========
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -17,8 +18,10 @@ def tg(msg):
     except:
         pass
 
-# ===================== INDICATORS ======================
+# ========= INDICATORS ==========
 def rsi(series, period=14):
+    if len(series) < period + 5:
+        return None
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -26,109 +29,134 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def ema(series, n):
+    if len(series) < n + 5:
+        return None
     return series.ewm(span=n, adjust=False).mean()
 
 def macd(series):
+    if len(series) < 50:
+        return None, None
     fast = ema(series, 12)
     slow = ema(series, 26)
     signal = ema(fast - slow, 9)
     return fast - slow, signal
 
-# ===================== SAFE CLOSE ======================
+# ========= SAFE CLOSE ==========
 def safe_close(df):
-    close = pd.to_numeric(df["Close"], errors="coerce")
-    close = close.dropna()
-    if len(close) < 50:
+    if df is None or "Close" not in df:
         return None
-    return close
+    c = pd.to_numeric(df["Close"], errors="coerce")
+    c = c.dropna()
+    if len(c) < 50:
+        return None
+    return c
 
-# ===================== GET DATA ======================
+# ========= GET DATA ==========
 def get(symbol, tf):
-    interval = {"M1":"1m", "M5":"5m", "M15":"15m", "M30":"30m"}[tf]
+    interval = {"M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m"}[tf]
     try:
         df = yf.download(symbol, interval=interval, period="1d")
-        if df is None or len(df)==0:
+        if df is None or len(df) == 0:
             return None
-        df = df.tail(200)
-        return df
+        return df.tail(200)
     except:
         return None
 
-# ===================== SIGNAL LOGIC ======================
+# ========= SIGNAL LOGIC ==========
 def signal(df):
     close = safe_close(df)
     if close is None:
         return None, 0
 
-    r = rsi(close).iloc[-1]
-    m, s = macd(close)
-    mcd = (m - s).iloc[-1]
-    ema50 = ema(close, 50).iloc[-1]
-    ema200 = ema(close, 200).iloc[-1]
-    last = close.iloc[-1]
-    prev = close.iloc[-2]
+    r = rsi(close)
+    if r is None:
+        return None, 0
+    r = float(r.iloc[-1])
 
-    trend = "UP" if ema50 > ema200 else "DOWN"
+    m, s = macd(close)
+    if m is None:
+        return None, 0
+    mcd = float((m - s).iloc[-1])
+
+    ema50 = ema(close, 50)
+    ema200 = ema(close, 200)
+
+    if ema50 is None or ema200 is None:
+        return None, 0
+
+    trend = "UP" if ema50.iloc[-1] > ema200.iloc[-1] else "DOWN"
 
     # BUY
-    if r < 30 and mcd > 0 and last > prev and trend == "UP":
+    if r < 30 and mcd > 0 and trend == "UP":
         return "BUY", 85
 
     # SELL
-    if r > 70 and mcd < 0 and last < prev and trend == "DOWN":
+    if r > 70 and mcd < 0 and trend == "DOWN":
         return "SELL", 85
 
     return None, 0
 
-# ===================== MULTI TF ======================
+# ========= MULTI-TF ==========
 def multi(symbol):
     dfs = {}
-    for tf in ["M1","M5","M15","M30"]:
+    for tf in ["M1", "M5", "M15", "M30"]:
         df = get(symbol, tf)
         if df is None:
-            return None
+            return None, None
         dfs[tf] = df
 
     res = {}
     for tf in dfs:
-        s, c = signal(dfs[tf])
+        s, _ = signal(dfs[tf])
         res[tf] = s or "-"
 
-    # если М1 М5 М15 М30 совпадают
     final = "-"
     if res["M1"] == res["M5"] == res["M15"] == res["M30"] and res["M1"] != "-":
         final = res["M1"]
 
     return final, res
 
-# ===================== UI ======================
-st.title("AI FX v102 — SIMPLE & STABLE 🔥")
-st.write("Multi-Timeframe (M1, M5, M15, M30) — стабильные сигналы")
 
-symbol = st.text_input("Введите валюту (пример: EURUSD=X, GBPUSD=X, USDJPY=X)", "EURUSD=X")
-btn = st.button("Сканировать")
+# ========= STREAMLIT UI + AUTO REFRESH ==========
+st.set_page_config(page_title="AI FX v102.1 Stable", layout="centered")
 
-if btn:
-    st.write("Сканирую…")
-    final, res = multi(symbol)
+st.title("AI FX v102.1 — AUTO MODE 🔥")
+st.write("⏱ Авто-обновление: **1 секунда**")
 
-    if final == "-" or final is None:
-        st.warning("Нет чёткого сигнала")
-    else:
-        st.success(f"Сигнал: **{final}**")
+symbol = st.text_input("Валютная пара (пример: EURUSD=X)", "EURUSD=X")
 
-        msg = f"""
-📡 AI FX v102
+placeholder = st.empty()
+
+last_signal = None
+
+while True:
+    with placeholder.container():
+        st.write("🔄 Сканирую…")
+
+        final, res = multi(symbol)
+
+        if final is None:
+            st.error("❌ Нет данных!")
+        elif final == "-":
+            st.warning("⚪ Сигнал не найден")
+        else:
+            st.success(f"💥 Сигнал: **{final}**")
+
+            # === отправка только при изменении сигнала ===
+            if final != last_signal:
+                msg = f"""
+📡 AI FX v102.1 AUTO
 Пара: {symbol}
-Multi-TF:
-M1 = {res['M1']}
-M5 = {res['M5']}
-M15 = {res['M15']}
-M30 = {res['M30']}
+
+M1: {res['M1']}
+M5: {res['M5']}
+M15: {res['M15']}
+M30: {res['M30']}
 
 🎯 Итоговый сигнал: {final}
-🕑 Экспирация: 2 минуты
-        """
+⏳ Экспирация: 2 минуты
+                """
+                tg(msg)
+                last_signal = final
 
-        tg(msg)
-        st.write("📩 Отправлено в Telegram!")
+        time.sleep(1)

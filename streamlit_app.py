@@ -3,7 +3,8 @@
 # Работает с секретами:
 # TELEGRAM_TOKEN = "..."
 # CHAT_ID        = "..."
-
+if st.button("📨 Отправить тест в Telegram"):
+    send_test_message()
 import time
 import json
 import random

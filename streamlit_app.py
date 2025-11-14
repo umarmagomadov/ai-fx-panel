@@ -566,35 +566,41 @@ def send_telegram(pair_name: str,
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
-    if signal == "BUY":
-        arrow = "🟢"
-    elif signal == "SELL":
-        arrow = "🔴"
-    else:
-        arrow = "⚪️"
+    arrow = "BUY" if signal == "BUY" else ("SELL" if signal == "SELL" else "FLAT")
 
     multi_str = (
-        f"M1={info.get('M1', '?')} | "
-        f"M5={info.get('M5', '?')} | "
-        f"M15={info.get('M15', '?')} | "
-        f"M30={info.get('M30', '?')}"
+        f"M1={info.get('M1','?')} | "
+        f"M5={info.get('M5','?')} | "
+        f"M15={info.get('M15','?')} | "
+        f"M30={info.get('M30','?')}"
     )
 
+    # ✔️ Чистый текст — 100% копируется
     text = (
-        f"🤖 AI FX Signal Bot v4.1 PRO\n"
-        f"📌 Пара: {pair_name}\n"
-        f"📊 Код для Pocket: {pair_code}\n"
-        f"🏷 Тип: {mtype}\n"
-        f"{arrow} Сигнал: {signal}\n\n"
-        f"📉 Мульти-TF: {multi_str}\n"
-        f"📈 Уверенность: {conf}%\n"
-        f"⏱ Экспирация: {expiry} мин\n"
-        f"🌍 Режим: {info.get('Regime', '-')} | Фаза: {info.get('Phase', '-')}\n"
-        f"ADX30: {round(info.get('ADX30', 0), 2)}\n"
-        f"❗ Бот для обучения. Не финсовет."
+        f"AI FX Signal Bot v4.1 PRO\n"
+        f"Пара: {pair_name}\n"
+        f"Код для Pocket (скопировать): {pair_code}\n"
+        f"Тип: {mtype}\n"
+        f"Сигнал: {signal}\n\n"
+        f"Мульти-TF: {multi_str}\n"
+        f"Уверенность: {conf}%\n"
+        f"Экспирация: {expiry} мин\n"
+        f"Режим: {info.get('Regime','-')} | Фаза: {info.get('Phase','-')}\n"
+        f"ADX30: {round(info.get('ADX30',0),2)}\n"
+        f"Бот для обучения. Не финсовет."
     )
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception:
+        pass
     payload = {
         "chat_id": CHAT_ID,
         "text": text,

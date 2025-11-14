@@ -1,6 +1,6 @@
-streamlit
+yfinance==0.2.43
 pandas
 numpy
-yfinance
-requests
 plotly
+streamlit
+requests

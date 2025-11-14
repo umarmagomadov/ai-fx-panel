@@ -257,15 +257,10 @@ def analyze_tf(df: pd.DataFrame) -> dict:
 
 def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
     """
-    Ultra-PRO мульти-таймфрейм.
-
-    Идея:
-    - Торгуем только когда минимум 3 TF за одно направление.
-    - Приоритет за M15 и M30.
-    - Фильтруем по ADX и RSI, чтобы не лезть в мусор.
-    - Конфиденс 80–99% только на реально сильных точках.
+    Ultra-PRO v2 — мощно, но не сверхжестко.
+    Дает реальные сигналы A/B, фильтрует мусор, не режет рынок полностью.
     """
-    # --------- Сырые данные ---------
+
     signals = [
         m1_info["signal"],
         m5_info["signal"],
@@ -276,22 +271,79 @@ def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
     buy_votes = signals.count("BUY")
     sell_votes = signals.count("SELL")
 
-    # ADX и RSI по старшим ТФ
+    # RSI + ADX старших TF
     adx30 = float(m30_info["ADX"])
     avg_rsi = (m5_info["RSI"] + m15_info["RSI"] + m30_info["RSI"]) / 3.0
 
     regimes = [m5_info["Regime"], m15_info["Regime"], m30_info["Regime"]]
     trend_votes = regimes.count("trend")
 
-    # --------- Базовый сигнал по голосам ---------
-    if buy_votes >= 3 and buy_votes > sell_votes:
+    # Базовый сигнал
+    if buy_votes >= 2 and buy_votes > sell_votes:
         base_signal = "BUY"
-    elif sell_votes >= 3 and sell_votes > buy_votes:
+    elif sell_votes >= 2 and sell_votes > buy_votes:
         base_signal = "SELL"
     else:
         base_signal = "FLAT"
 
     final_signal = base_signal
+
+    # Фильтрация слабых ситуаций — но мягкая
+    if base_signal == "BUY":
+        if avg_rsi < 52 or adx30 < 18:
+            final_signal = "FLAT"
+
+    elif base_signal == "SELL":
+        if avg_rsi > 48 or adx30 < 18:
+            final_signal = "FLAT"
+
+    # -------- Уверенность (0-100) --------
+    score = 0
+
+    # Голоса TF
+    score += max(buy_votes, sell_votes) * 12  # максимум 48
+
+    # Тренд старших TF
+    score += trend_votes * 10  # максимум 30
+
+    # ADX → сила движения
+    score += min(int(adx30 * 1.2), 20)  # максимум 20
+
+    # RSI (далеко ли от 50)
+    score += min(int(abs(avg_rsi - 50) * 1.2), 15)
+
+    conf = min(99, max(0, score))
+
+    # Если FLAT — ограничиваем
+    if final_signal == "FLAT":
+        conf = min(conf, 60)
+
+    # Классы
+    if conf >= 90:
+        trade_class = "A"
+    elif conf >= 80:
+        trade_class = "B"
+    else:
+        trade_class = "C"
+
+    regime = "trend" if trend_votes >= 2 else "flat"
+
+    if avg_rsi <= 40 or avg_rsi >= 60:
+        phase = "start"
+    elif 45 < avg_rsi < 55:
+        phase = "mid"
+    else:
+        phase = "end"
+
+    return final_signal, conf, trade_class, {
+        "M1": m1_info["signal"],
+        "M5": m5_info["signal"],
+        "M15": m15_info["signal"],
+        "M30": m30_info["signal"],
+        "Regime": regime,
+        "Phase": phase,
+        "ADX30": round(adx30, 2),
+                   }
 
     # --------- Ultra-PRO фильтр качества ---------
     strong = False

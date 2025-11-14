@@ -576,32 +576,33 @@ def send_telegram(
     else:
         arrow = "⚪️"
 
-    # Строка мульти-TF
+    # Мульти-TF строка
     multi_str = (
-        f"M1={info.get('M1', '?')} | "
-        f"M5={info.get('M5', '?')} | "
-        f"M15={info.get('M15', '?')} | "
-        f"M30={info.get('M30', '?')}"
+        f"M1={info.get('M1','?')} | "
+        f"M5={info.get('M5','?')} | "
+        f"M15={info.get('M15','?')} | "
+        f"M30={info.get('M30','?')}"
     )
 
-    # Код для Pocket — в чистом виде, хорошо копируется
-    pocket_str = pair_code  # например: "EUR/USD", "GBP/USD", "BTCUSD"
-    
+    # --- Правильное формирование кода для Pocket ---
+    if "/" in pair_name:              # EUR/USD → EUR/USD
+        pocket_code = pair_name
+    else:                             # BTCUSD → BTCUSD
+        pocket_code = pair_name
+
+    # --- Окончательный текст сообщения ---
     text = (
-    f"AI FX Signal Bot v4.1 PRO\n"
-    f"Пара: {pair_name}\n"
-    f"Код для Pocket: {pocket_code}\n"
-    f"Тип: {mtype}\n"
-    f"Сигнал: {signal}\n"
-    f"Уверенность: {conf}%\n"
-    f"Экспирация: {expiry} мин\n"
-    f"M1: {info.get('M1','?')}\n"
-    f"M5: {info.get('M5','?')}\n"
-    f"M15: {info.get('M15','?')}\n"
-    f"M30: {info.get('M30','?')}\n"
-    f"Режим: {info.get('Regime','?')}\n"
-    f"Фаза: {info.get('Phase','?')}\n"
-    f"ADX30: {info.get('ADX30','?')}\n"
+        f"🤖 AI FX Signal Bot v4.1 PRO\n"
+        f"📌 Пара: {pair_name}\n"
+        f"📍 Код для Pocket: {pocket_code}\n"
+        f"📑 Тип: {mtype}\n"
+        f"{arrow} Сигнал: {signal}\n\n"
+        f"📊 Мульти-TF: {multi_str}\n"
+        f"💪 Уверенность: {conf}%\n"
+        f"⏳ Экспирация: {expiry} мин\n"
+        f"🌍 Режим: {info.get('Regime','?')} | Фаза: {info.get('Phase','?')}\n"
+        f"📈 ADX30: {info.get('ADX30','?')}\n"
+        f"❗ Бот для обучения. Не финсовет."
     )
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -609,16 +610,7 @@ def send_telegram(
         "chat_id": CHAT_ID,
         "text": text,
     }
-    try:
-        requests.post(url, json=payload, timeout=5)
-    except Exception:
-        pass
-        pass
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-    }
+
     try:
         requests.post(url, json=payload, timeout=5)
     except Exception:

@@ -11,10 +11,13 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 
-# ================== SECRETS ==================
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", os.getenv("TELEGRAM_TOKEN", ""))
-CHAT_ID        = st.secrets.get("CHAT_ID",        os.getenv("CHAT_ID", ""))
-ULTRA_CHAT_ID  = st.secrets.get("ULTRA_CHAT_ID",  os.getenv("ULTRA_CHAT_ID", ""))
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    params = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    try:
+        requests.get(url, params=params, timeout=5)
+    except:
+        pass
 
 # ================== SETTINGS =================
 REFRESH_SEC     = 1       # автообновление

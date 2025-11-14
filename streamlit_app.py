@@ -577,18 +577,23 @@ def send_telegram(pair_name: str,
 
     # ✔️ Чистый текст — 100% копируется
     text = (
-        f"AI FX Signal Bot v4.1 PRO\n"
-        f"Пара: {pair_name}\n"
-        f"Код для Pocket (скопировать): {pair_code}\n"
-        f"Тип: {mtype}\n"
-        f"Сигнал: {signal}\n\n"
-        f"Мульти-TF: {multi_str}\n"
-        f"Уверенность: {conf}%\n"
-        f"Экспирация: {expiry} мин\n"
-        f"Режим: {info.get('Regime','-')} | Фаза: {info.get('Phase','-')}\n"
-        f"ADX30: {round(info.get('ADX30',0),2)}\n"
-        f"Бот для обучения. Не финсовет."
-    )
+        # ✔️ 100% копируемый вариант, как в примере
+pocket_str = pair_code.replace("/", "/")   # оставить обычный слэш, без форматирования
+
+text = (
+    f"🤖 AI FX Signal Bot v4.1 PRO\n"
+    f"Пара: {pair_name}\n"
+    f"Код для Pocket: {pocket_str}\n"
+    f"Тип: {mtype}\n"
+    f"Сигнал: {signal}\n\n"
+    f"Мульти-TF: M1={info.get('M1','?')} | "
+    f"M5={info.get('M5','?')} | M15={info.get('M15','?')} | M30={info.get('M30','?')}\n"
+    f"Уверенность: {conf}%\n"
+    f"Экспирация: {expiry} мин\n"
+    f"Режим: {info.get('Regime','-')} | Фаза: {info.get('Phase','-')}\n"
+    f"ADX30: {round(info.get('ADX30',0),2)}\n"
+    f"🛑 Бот для обучения. Не финсовет."
+)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {

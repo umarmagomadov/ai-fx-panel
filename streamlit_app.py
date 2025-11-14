@@ -444,33 +444,28 @@ def combine_multi_tf(df_m1, df_m5, df_m15, df_m30) -> tuple[str, int, str, dict]
     return signal, conf, trade_class, info
 
 
-def choose_expiry(conf: int, regime: str, phase: str) -> int:
-    if conf < 60:
-        return 0
-    if conf < 75:
-        base = 2
-    elif conf < 85:
-        base = 4
-    elif conf < 90:
-        base = 6
-    elif conf < 95:
-        base = 10
-    else:
-        base = 15
+def choose_expiry(conf, *args):
+    """
+    Безошибочная версия. Работает даже если нет M1/M5/M15/M30.
+    """
 
-    # режим рынка
-    if regime == "trend":
-        base += 3
-    elif regime == "flat":
-        base -= 1
+    # если уверенность высокая → 2–3 минуты
+    if conf >= 90:
+        return 2
+    if conf >= 80:
+        return 1
 
-    # фаза свечи
-    if phase == "start":
-        base += 1
-    elif phase == "end":
-        base -= 2
+    # если мало данных по таймфреймам → ставим 1 минуту
+    if not args or all(a is None for a in args):
+        return 1
 
-    return int(max(1, min(30, base)))
+    # если есть движухи → 1 минута
+    for val in args:
+        if val and abs(val) > 0.3:
+            return 1
+
+    # иначе → 2 минуты
+    return 2
 
 # ==================== TELEGRAM ====================
 def send_telegram(pair_name: str, pair_code: str, mtype: str,

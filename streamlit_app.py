@@ -556,7 +556,7 @@ def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
 
 # ==================== TELEGRAM ====================
 
-def send_telegram(
+def def send_telegram(
     pair_name: str,
     pair_code: str,
     signal: str,
@@ -568,48 +568,77 @@ def send_telegram(
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
-    # Стрелка по направлению
-    if signal == "BUY":
-        arrow = "🟢"
-    elif signal == "SELL":
-        arrow = "🔴"
+    # -------------------------
+    # 1) Копируемый код валюты
+    # -------------------------
+    # BTCUSD → BTCUSD
+    # EURUSD → EUR/USD
+    if len(pair_code) == 6:
+        pocket_code = pair_code[:3] + "/" + pair_code[3:]
     else:
-        arrow = "⚪️"
+        pocket_code = pair_code  # BTCUSD оставляем как есть
 
-    # Мульти-TF строка
-    multi_str = (
-        f"M1={info.get('M1','?')} | "
-        f"M5={info.get('M5','?')} | "
-        f"M15={info.get('M15','?')} | "
-        f"M30={info.get('M30','?')}"
-    )
+    # -------------------------
+    # 2) Стрелка направления
+    # -------------------------
+    if signal == "BUY":
+        arrow = "🟢 BUY"
+    elif signal == "SELL":
+        arrow = "🔴 SELL"
+    else:
+        arrow = "⚪ FLAT"
 
-    # --- Правильное формирование кода для Pocket ---
-    if "/" in pair_name:              # EUR/USD → EUR/USD
-        pocket_code = pair_name
-    else:                             # BTCUSD → BTCUSD
-        pocket_code = pair_name
+    # -------------------------
+    # 3) Усиленная логика — отправляем только сильные точки входа
+    # -------------------------
+    m1 = info.get("M1", "?")
+    m5 = info.get("M5", "?")
+    m15 = info.get("M15", "?")
+    m30 = info.get("M30", "?")
+    adx = info.get("ADX30", 0)
 
-    # --- Окончательный текст сообщения ---
+    strong_trend = (m5 == signal and m15 == signal) or (m15 == signal and m30 == signal)
+    multi_agree = sum([m1 == signal, m5 == signal, m15 == signal, m30 == signal])
+
+    # Требования для "супер-сигналов"
+    if conf < 80:
+        return  # слабый
+
+    if adx < 10:
+        return  # тренда нет
+
+    if multi_agree < 2:
+        return  # слабая MTF структура
+
+    # -------------------------
+    # 4) Готовый текст (100% копируется)
+    # -------------------------
     text = (
         f"🤖 AI FX Signal Bot v4.1 PRO\n"
         f"📌 Пара: {pair_name}\n"
-        f"📍 Код для Pocket: {pocket_code}\n"
-        f"📑 Тип: {mtype}\n"
-        f"{arrow} Сигнал: {signal}\n\n"
-        f"📊 Мульти-TF: {multi_str}\n"
+        f"📋 Код для Pocket: {pocket_code}\n"
+        f"🏷 Тип: {mtype}\n"
+        f"{arrow}\n"
+        f"\n"
+        f"📊 Мульти-TF:\n"
+        f"• M1: {m1}\n"
+        f"• M5: {m5}\n"
+        f"• M15: {m15}\n"
+        f"• M30: {m30}\n"
+        f"\n"
         f"💪 Уверенность: {conf}%\n"
-        f"⏳ Экспирация: {expiry} мин\n"
-        f"🌍 Режим: {info.get('Regime','?')} | Фаза: {info.get('Phase','?')}\n"
-        f"📈 ADX30: {info.get('ADX30','?')}\n"
+        f"⏱ Экспирация: {expiry} мин\n"
+        f"📈 ADX30: {adx}\n"
+        f"\n"
+        f"🌍 Режим: flat | Фаза: start\n"
         f"❗ Бот для обучения. Не финсовет."
     )
 
+    # -------------------------
+    # 5) Отправка
+    # -------------------------
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-    }
+    payload = {"chat_id": CHAT_ID, "text": text}
 
     try:
         requests.post(url, json=payload, timeout=5)

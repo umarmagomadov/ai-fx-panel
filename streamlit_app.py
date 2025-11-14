@@ -586,7 +586,7 @@ def send_telegram(
 
     # Код для Pocket — в чистом виде, хорошо копируется
     pocket_str = pair_code  # например: "EUR/USD", "GBP/USD", "BTCUSD"
-
+    
     text = (
     f"AI FX Signal Bot v4.1 PRO\n"
     f"Пара: {pair_name}\n"

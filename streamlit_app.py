@@ -255,95 +255,175 @@ def analyze_tf(df: pd.DataFrame) -> dict:
     }
 
 
-def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
+def combine_multi_tf(m1_info: dict,
+                     m5_info: dict,
+                     m15_info: dict,
+                     m30_info: dict):
     """
-    Ultra-PRO v2 — мощно, но не сверхжестко.
-    Дает реальные сигналы A/B, фильтрует мусор, не режет рынок полностью.
+    Ultra-PRO v3.
+    Усиленный многотаймфреймовый сигнал:
+    - учитываем совпадение направлений M1+M5+M15+M30
+    - даём больше веса старшим TF
+    - усиливаем по ADX и RSI
+    - получаем реалистичные 60–95% уверенности
     """
 
-    signals = [
-        m1_info["signal"],
-        m5_info["signal"],
-        m15_info["signal"],
-        m30_info["signal"],
-    ]
+    # ---------- 1. Сбор направлений ----------
+    infos = [m1_info, m5_info, m15_info, m30_info]
+    signals = [i["signal"] for i in infos]
 
     buy_votes = signals.count("BUY")
     sell_votes = signals.count("SELL")
 
-    # RSI + ADX старших TF
-    adx30 = float(m30_info["ADX"])
+    # Итоговый сигнал
+    if buy_votes == 0 and sell_votes == 0:
+        final_signal = "FLAT"
+    elif buy_votes > sell_votes:
+        final_signal = "BUY"
+    elif sell_votes > buy_votes:
+        final_signal = "SELL"
+    else:
+        final_signal = "FLAT"
+
+    # ---------- 2. Базовая уверенность по голосам ----------
+    conf = 40  # старт
+
+    max_votes = max(buy_votes, sell_votes)
+    if max_votes == 4:
+        conf += 35
+    elif max_votes == 3:
+        conf += 25
+    elif max_votes == 2:
+        conf += 15
+    elif max_votes == 1:
+        conf += 5
+    else:
+        conf += 0
+
+    # ---------- 3. Вес старших TF (M15 + M30) ----------
+    high_tf_signals = [m15_info["signal"], m30_info["signal"]]
+    if final_signal in ("BUY", "SELL"):
+        high_tf_agree = high_tf_signals.count(final_signal)
+        if high_tf_agree == 2:
+            conf += 15
+        elif high_tf_agree == 1:
+            conf += 5
+        else:
+            conf -= 10  # старшие против — ослабляем
+
+    # ---------- 4. ADX: сила тренда ----------
+    avg_adx = (m5_info["ADX"] + m15_info["ADX"] + m30_info["ADX"]) / 3.0
+    if avg_adx >= 35:
+        conf += 10
+    elif avg_adx >= 25:
+        conf += 5
+    elif avg_adx <= 15:
+        conf -= 10
+
+    # ---------- 5. RSI: зона перекупленности/перепроданности ----------
     avg_rsi = (m5_info["RSI"] + m15_info["RSI"] + m30_info["RSI"]) / 3.0
 
-    regimes = [m5_info["Regime"], m15_info["Regime"], m30_info["Regime"]]
-    trend_votes = regimes.count("trend")
+    if final_signal == "BUY":
+        if avg_rsi >= 60:
+            conf += 10
+        elif avg_rsi <= 45:
+            conf -= 10
+    elif final_signal == "SELL":
+        if avg_rsi <= 40:
+            conf += 10
+        elif avg_rsi >= 55:
+            conf -= 10
 
-    # Базовый сигнал
-    if buy_votes >= 2 and buy_votes > sell_votes:
-        base_signal = "BUY"
-    elif sell_votes >= 2 and sell_votes > buy_votes:
-        base_signal = "SELL"
-    else:
-        base_signal = "FLAT"
+    # Ограничиваем 0–100
+    conf = int(max(0, min(100, conf)))
 
-    final_signal = base_signal
-
-    # Фильтрация слабых ситуаций — но мягкая
-    if base_signal == "BUY":
-        if avg_rsi < 52 or adx30 < 18:
-            final_signal = "FLAT"
-
-    elif base_signal == "SELL":
-        if avg_rsi > 48 or adx30 < 18:
-            final_signal = "FLAT"
-
-    # -------- Уверенность (0-100) --------
-    score = 0
-
-    # Голоса TF
-    score += max(buy_votes, sell_votes) * 12  # максимум 48
-
-    # Тренд старших TF
-    score += trend_votes * 10  # максимум 30
-
-    # ADX → сила движения
-    score += min(int(adx30 * 1.2), 20)  # максимум 20
-
-    # RSI (далеко ли от 50)
-    score += min(int(abs(avg_rsi - 50) * 1.2), 15)
-
-    conf = min(99, max(0, score))
-
-    # Если FLAT — ограничиваем
-    if final_signal == "FLAT":
-        conf = min(conf, 60)
-
-    # Классы
-    if conf >= 90:
+    # ---------- 6. Класс сигнала ----------
+    if conf >= 92:
         trade_class = "A"
-    elif conf >= 80:
+    elif conf >= 84:
         trade_class = "B"
     else:
         trade_class = "C"
 
-    regime = "trend" if trend_votes >= 2 else "flat"
+    # ---------- 7. Режим и фаза рынка ----------
+    regime_votes = [i["Regime"] for i in infos]
+    trend_votes = regime_votes.count("trend")
 
-    if avg_rsi <= 40 or avg_rsi >= 60:
-        phase = "start"
-    elif 45 < avg_rsi < 55:
-        phase = "mid"
+    if trend_votes >= 3:
+        regime = "trend"
+    elif trend_votes == 2:
+        regime = "mixed"
     else:
-        phase = "end"
+        regime = "flat"
 
-    return final_signal, conf, trade_class, {
+    # Фазу возьмём по RSI M30
+    rsi30 = m30_info["RSI"]
+    if rsi30 < 40 or rsi30 > 60:
+        phase = "start"   # начало импульса
+    elif 40 <= rsi30 <= 45 or 55 <= rsi30 <= 60:
+        phase = "mid"     # середина движения
+    else:
+        phase = "end"     # выдох движения / возможный разворот
+
+    # ---------- 8. Детальная инфа для интерфейса/телеги ----------
+    info = {
         "M1": m1_info["signal"],
         "M5": m5_info["signal"],
         "M15": m15_info["signal"],
         "M30": m30_info["signal"],
+
+        # условные "локальные" уверенности для отображения
+        "Conf_M1":  60 if m1_info["signal"] == final_signal else 40,
+        "Conf_M5":  70 if m5_info["signal"] == final_signal else 40,
+        "Conf_M15": 80 if m15_info["signal"] == final_signal else 40,
+        "Conf_M30": 85 if m30_info["signal"] == final_signal else 40,
+
         "Regime": regime,
         "Phase": phase,
-        "ADX30": round(adx30, 2),
-                   }
+        "BW": abs(m30_info["RSI"] - 50),   # условная ширина тренда
+        "ADX30": float(m30_info["ADX"]),
+    }
+
+    return final_signal, conf, trade_class, info
+
+
+def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
+    """
+    Умная экспирация под Pocket Option.
+    - очень слабые сигналы → 0 (пропускать)
+    - нормальные → 2–3 мин
+    - сильные → 3–6 мин
+    """
+
+    # 1) базовое время по уверенности
+    if conf >= 95:
+        base = 5
+    elif conf >= 90:
+        base = 4
+    elif conf >= 85:
+        base = 3
+    elif conf >= 80:
+        base = 2
+    else:
+        base = 0  # слабый сигнал — лучше не брать
+
+    # 2) режим рынка
+    if regime == "trend":
+        base += 1          # тренд — можно держать чуть дольше
+    elif regime == "flat":
+        base -= 1          # флэт — лучше короче
+
+    # 3) фаза движения
+    if phase == "start":
+        base += 1          # начало движения — есть потенциал
+    elif phase == "end":
+        base -= 1          # возможный разворот — сокращаем
+
+    if base <= 0:
+        return 0
+
+    # ограничение в пределах 1–15 минут (для PO нормально)
+    return int(max(1, min(15, base)))
 
     # --------- Ultra-PRO фильтр качества ---------
     strong = False

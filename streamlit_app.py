@@ -1,169 +1,134 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import yfinance as yf
 import requests
-from datetime import datetime
+import os
 
-# ========= SAFE HELPERS ========= #
-def safe_close(df):
-    """Гарантированно возвращает чистый Series с числами."""
-    if df is None or len(df) == 0:
-        return pd.Series(dtype=float)
+# ===================== TELEGRAM ======================
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-    close = pd.to_numeric(df["Close"], errors="coerce")
-    close = close.replace([np.inf, -np.inf], np.nan).dropna()
+def tg(msg):
+    try:
+        requests.get(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            params={"chat_id": CHAT_ID, "text": msg}
+        )
+    except:
+        pass
 
-    return close
-
-
-# ========= INDICATORS ========= #
+# ===================== INDICATORS ======================
 def rsi(series, period=14):
-    series = safe_close(pd.DataFrame({"Close": series}))
-    if len(series) < period + 1:
-        return pd.Series([50])  # нейтральное значение
-
     delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
-
-    ema_up = up.ewm(span=period).mean()
-    ema_down = down.ewm(span=period).mean()
-
-    rs = ema_up / (ema_down + 1e-9)
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    rs = gain.ewm(span=period).mean() / loss.ewm(span=period).mean()
     return 100 - (100 / (1 + rs))
 
-
-def adx(series, period=14):
-    """Простая безопасная замена ADX."""
-    series = safe_close(pd.DataFrame({"Close": series}))
-    if len(series) < period + 2:
-        return pd.Series([20])  # нейтральное значение
-
-    change = series.diff().abs()
-    adx_raw = change.rolling(period).mean()
-    return adx_raw / (adx_raw.max() + 1e-9) * 40  # от 0 до 40
-
+def ema(series, n):
+    return series.ewm(span=n, adjust=False).mean()
 
 def macd(series):
-    series = safe_close(pd.DataFrame({"Close": series}))
-    if len(series) < 35:
-        return pd.Series([0])
+    fast = ema(series, 12)
+    slow = ema(series, 26)
+    signal = ema(fast - slow, 9)
+    return fast - slow, signal
 
-    fast = series.ewm(span=12).mean()
-    slow = series.ewm(span=26).mean()
-    return fast - slow
+# ===================== SAFE CLOSE ======================
+def safe_close(df):
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    close = close.dropna()
+    if len(close) < 50:
+        return None
+    return close
 
-
-# ========= MULTI-TIMEFRAME BLOCK ========= #
-def download_tf(symbol, tf="5m"):
+# ===================== GET DATA ======================
+def get(symbol, tf):
+    interval = {"M1":"1m", "M5":"5m", "M15":"15m", "M30":"30m"}[tf]
     try:
-        df = yf.download(symbol, period="2d", interval=tf)
+        df = yf.download(symbol, interval=interval, period="1d")
+        if df is None or len(df)==0:
+            return None
+        df = df.tail(200)
         return df
     except:
-        return pd.DataFrame()
+        return None
 
-
-def tf_direction(df):
+# ===================== SIGNAL LOGIC ======================
+def signal(df):
     close = safe_close(df)
-    if len(close) < 3:
-        return "FLAT"
+    if close is None:
+        return None, 0
 
-    return "BUY" if close.iloc[-1] > close.iloc[-3] else "SELL"
+    r = rsi(close).iloc[-1]
+    m, s = macd(close)
+    mcd = (m - s).iloc[-1]
+    ema50 = ema(close, 50).iloc[-1]
+    ema200 = ema(close, 200).iloc[-1]
+    last = close.iloc[-1]
+    prev = close.iloc[-2]
 
+    trend = "UP" if ema50 > ema200 else "DOWN"
 
-def combine_signal(m1, m5, m15, m30):
-    arr = [m1, m5, m15, m30]
-    if arr.count("BUY") >= 3:
-        return "BUY"
-    if arr.count("SELL") >= 3:
-        return "SELL"
-    return "FLAT"
+    # BUY
+    if r < 30 and mcd > 0 and last > prev and trend == "UP":
+        return "BUY", 85
 
+    # SELL
+    if r > 70 and mcd < 0 and last < prev and trend == "DOWN":
+        return "SELL", 85
 
-# ========= MAIN SCORE ========= #
-def compute_signal(sym):
-    # Загружаем все ТФ
-    df1 = download_tf(sym, "1m")
-    df5 = download_tf(sym, "5m")
-    df15 = download_tf(sym, "15m")
-    df30 = download_tf(sym, "30m")
+    return None, 0
 
-    # Направления
-    d1 = tf_direction(df1)
-    d5 = tf_direction(df5)
-    d15 = tf_direction(df15)
-    d30 = tf_direction(df30)
+# ===================== MULTI TF ======================
+def multi(symbol):
+    dfs = {}
+    for tf in ["M1","M5","M15","M30"]:
+        df = get(symbol, tf)
+        if df is None:
+            return None
+        dfs[tf] = df
 
-    # Индикаторы
-    close = safe_close(df5)
-    r = float(rsi(close).iloc[-1])
-    a = float(adx(close).iloc[-1])
-    m = float(macd(close).iloc[-1])
+    res = {}
+    for tf in dfs:
+        s, c = signal(dfs[tf])
+        res[tf] = s or "-"
 
-    # Итоговое направление
-    main = combine_signal(d1, d5, d15, d30)
+    # если М1 М5 М15 М30 совпадают
+    final = "-"
+    if res["M1"] == res["M5"] == res["M15"] == res["M30"] and res["M1"] != "-":
+        final = res["M1"]
 
-    # Уверенность
-    conf = 50
-    if main != "FLAT":
-        conf += 10
-    if abs(m) > 0.01:
-        conf += 10
-    if a > 10:
-        conf += 10
-    if 45 < r < 55:
-        conf -= 10
+    return final, res
 
-    conf = max(1, min(conf, 99))
+# ===================== UI ======================
+st.title("AI FX v102 — SIMPLE & STABLE 🔥")
+st.write("Multi-Timeframe (M1, M5, M15, M30) — стабильные сигналы")
 
-    return main, conf, r, a, m, (d1, d5, d15, d30)
+symbol = st.text_input("Введите валюту (пример: EURUSD=X, GBPUSD=X, USDJPY=X)", "EURUSD=X")
+btn = st.button("Сканировать")
 
+if btn:
+    st.write("Сканирую…")
+    final, res = multi(symbol)
 
-# ========= TELEGRAM SENDER ========= #
-def send_telegram(msg):
-    import os
-    TOKEN = os.getenv("TELEGRAM_TOKEN")
-    CHAT = os.getenv("CHAT_ID")
+    if final == "-" or final is None:
+        st.warning("Нет чёткого сигнала")
+    else:
+        st.success(f"Сигнал: **{final}**")
 
-    if not TOKEN or not CHAT:
-        return
-
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT, "text": msg})
-
-
-# ========= STREAMLIT UI ========= #
-st.title("AI FX v102.1 — MAX-FILTER SAFE")
-
-symbols = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "NZDUSD=X", "BTC-USD"]
-
-pair = st.selectbox("Валютная пара:", symbols)
-thr = st.slider("Минимальная уверенность (%)", 50, 95, 60)
-pause = st.number_input("Пауза между сигналами (сек)", 20, 600, 60)
-
-if st.button("Сканировать"):
-    sig, conf, r, a, m, tf = compute_signal(pair)
-
-    st.write("Сигнал:", sig)
-    st.write("Уверенность:", conf, "%")
-    st.write("RSI:", r)
-    st.write("ADX:", a)
-    st.write("MACD:", m)
-    st.write("TF:", tf)
-
-    if conf >= thr and sig != "FLAT":
         msg = f"""
-📊 AI FX SIGNAL v102.1
-Пара: {pair}
-Сигнал: {sig}
+📡 AI FX v102
+Пара: {symbol}
+Multi-TF:
+M1 = {res['M1']}
+M5 = {res['M5']}
+M15 = {res['M15']}
+M30 = {res['M30']}
 
-🧩 Multi-TF: M1={tf[0]} | M5={tf[1]} | M15={tf[2]} | M30={tf[3]}
-💪 Уверенность: {conf}%
-📈 RSI: {r:.1f}
-📉 ADX: {a:.1f}
-📊 MACD: {m:.5f}
-⏰ {datetime.utcnow().strftime("%H:%M:%S")} UTC
-"""
-        send_telegram(msg)
-        st.success("Отправлено!")
+🎯 Итоговый сигнал: {final}
+🕑 Экспирация: 2 минуты
+        """
+
+        tg(msg)
+        st.write("📩 Отправлено в Telegram!")

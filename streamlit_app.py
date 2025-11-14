@@ -256,7 +256,16 @@ def analyze_tf(df: pd.DataFrame) -> dict:
 
 
 def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
-    """Комбинируем 4 таймфрейма → один мощный сигнал + уверенность."""
+    """
+    Ultra-PRO мульти-таймфрейм.
+
+    Идея:
+    - Торгуем только когда минимум 3 TF за одно направление.
+    - Приоритет за M15 и M30.
+    - Фильтруем по ADX и RSI, чтобы не лезть в мусор.
+    - Конфиденс 80–99% только на реально сильных точках.
+    """
+    # --------- Сырые данные ---------
     signals = [
         m1_info["signal"],
         m5_info["signal"],
@@ -267,65 +276,106 @@ def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
     buy_votes = signals.count("BUY")
     sell_votes = signals.count("SELL")
 
-    if buy_votes == 0 and sell_votes == 0:
-        final_signal = "FLAT"
-    elif buy_votes > sell_votes:
-        final_signal = "BUY"
-    elif sell_votes > buy_votes:
-        final_signal = "SELL"
-    else:
-        final_signal = "FLAT"
+    # ADX и RSI по старшим ТФ
+    adx30 = float(m30_info["ADX"])
+    avg_rsi = (m5_info["RSI"] + m15_info["RSI"] + m30_info["RSI"]) / 3.0
 
-    # Уверенность
-    conf = 50  # база
-
-    # совпадения по сигналам
-    conf += 10 * max(buy_votes, sell_votes)
-
-    # тренд по старшим tf
     regimes = [m5_info["Regime"], m15_info["Regime"], m30_info["Regime"]]
     trend_votes = regimes.count("trend")
-    if trend_votes >= 2:
-        conf += 10
 
-    # средний RSI по старшим tf
-    avg_rsi = (m5_info["RSI"] + m15_info["RSI"] + m30_info["RSI"]) / 3
-    if final_signal == "BUY" and avg_rsi < 55:
-        conf -= 10
-    if final_signal == "SELL" and avg_rsi > 45:
-        conf -= 10
+    # --------- Базовый сигнал по голосам ---------
+    if buy_votes >= 3 and buy_votes > sell_votes:
+        base_signal = "BUY"
+    elif sell_votes >= 3 and sell_votes > buy_votes:
+        base_signal = "SELL"
+    else:
+        base_signal = "FLAT"
 
-    # усиление за сильный ADX на M30
-    if m30_info["ADX"] >= 30:
-        conf += 5
-    if m30_info["ADX"] >= 40:
-        conf += 5
+    final_signal = base_signal
 
-    conf = int(max(0, min(100, conf)))
+    # --------- Ultra-PRO фильтр качества ---------
+    strong = False
+    if base_signal == "BUY":
+        strong = (
+            buy_votes >= 3
+            and trend_votes >= 2          # тренд по старшим
+            and avg_rsi >= 58             # не середина, а нормальный перекос
+            and adx30 >= 22               # рынок не мёртвый
+        )
+    elif base_signal == "SELL":
+        strong = (
+            sell_votes >= 3
+            and trend_votes >= 2
+            and avg_rsi <= 42
+            and adx30 >= 22
+        )
 
-    if conf >= 90:
+    if not strong:
+        # если условия не выполнены — сигнал считаем FLAT,
+        # чтобы бот молчал в мусоре
+        final_signal = "FLAT"
+
+    # --------- Подсчёт уверенности (0–99) ---------
+    score = 0.0
+
+    # 1) Согласие TF
+    score += max(buy_votes, sell_votes) * 8.0          # до ~32
+
+    # 2) Тренд по старшим TF
+    score += min(trend_votes, 3) * 8.0                 # до ~24
+
+    # 3) ADX силы тренда
+    adx_score = max(0.0, min(adx30, 50.0)) / 50.0 * 25.0
+    score += adx_score                                  # до ~25
+
+    # 4) Насколько RSI далеко от 50 (чем дальше — тем лучше)
+    rsi_edge = abs(avg_rsi - 50.0)
+    rsi_score = max(0.0, min(rsi_edge, 20.0)) / 20.0 * 18.0
+    score += rsi_score                                  # до ~18
+
+    conf = int(round(max(0.0, min(score, 99.0))))
+
+    # Для FLAT не даём конфу выглядеть как "суперсигнал"
+    if final_signal == "FLAT":
+        conf = min(conf, 75)
+
+    # --------- Класс сигнала ---------
+    if conf >= 92:
+        trade_class = "A+"
+    elif conf >= 85:
         trade_class = "A"
     elif conf >= 80:
         trade_class = "B"
     else:
         trade_class = "C"
 
+    # --------- Режим и фаза для инфо ---------
     regime = "trend" if trend_votes >= 2 else "flat"
-    phase = "start" if avg_rsi < 45 or avg_rsi > 55 else "mid"
 
+    if avg_rsi <= 35 or avg_rsi >= 65:
+        phase = "end"      # возможное окончание импульса
+    elif avg_rsi < 45 or avg_rsi > 55:
+        phase = "start"    # активная зона движения
+    else:
+        phase = "mid"      # середина, шум
+
+    # --------- Информация для таблицы/телеги ---------
     info = {
         "M1": m1_info["signal"],
         "M5": m5_info["signal"],
         "M15": m15_info["signal"],
         "M30": m30_info["signal"],
-        "Conf_M1": conf,
-        "Conf_M5": conf,
-        "Conf_M15": conf,
-        "Conf_M30": conf,
+
+        # можно потом показывать по ТФ, если захочешь
+        "Conf_M1": conf if m1_info["signal"] == final_signal else 0,
+        "Conf_M5": conf if m5_info["signal"] == final_signal else 0,
+        "Conf_M15": conf if m15_info["signal"] == final_signal else 0,
+        "Conf_M30": conf if m30_info["signal"] == final_signal else 0,
+
         "Regime": regime,
         "Phase": phase,
-        "BW": abs(m30_info["RSI"] - 50),
-        "ADX30": m30_info["ADX"],
+        "BW": round(abs(avg_rsi - 50.0), 2),  # ширина отклонения от середины
+        "ADX30": round(adx30, 2),
     }
 
     return final_signal, conf, trade_class, info
@@ -335,34 +385,41 @@ def combine_multi_tf(m1_info, m5_info, m15_info, m30_info):
 
 def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
     """
-    Умная экспирация, не ломается при None.
-    Возвращает минуты (0–30). 0 = не торгуем.
+    Ultra-PRO экспирация:
+    - Очень сильные сигналы → 2–3 минуты
+    - Средние → 4–6 минут
+    - Всё, что слабее 80% → не торговать (0)
     """
-    if conf < 75:
-        return 0  # слишком слабый сигнал
+    # слишком слабые — пропуск
+    if conf < 80:
+        return 0
 
+    # базовое время по уверенности
     if conf >= 95:
         base = 2
     elif conf >= 90:
         base = 3
     elif conf >= 85:
         base = 4
-    else:
+    else:  # 80–84
         base = 5
 
+    # тренд → можно держать дольше
     if regime == "trend":
-        base += 2
+        base += 1
     elif regime == "flat":
         base -= 1
 
+    # фаза движения
     if phase == "start":
-        base += 1
+        base += 1        # старт импульса → даём ещё минуту
     elif phase == "end":
-        base -= 1
+        base -= 1        # конец — аккуратно
 
     if base <= 0:
         return 0
-    return int(max(1, min(30, base)))
+
+    return int(max(1, min(15, base)))  # ограничим 1–15 минут
 
 
 # ==================== TELEGRAM ====================

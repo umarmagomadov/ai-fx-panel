@@ -1,7 +1,7 @@
-# ===================== AI FX Bot v4.1 PRO =====================
+# ===================== AI FX Bot v4.2 PRO =====================
 # M1 + M5 + M15 + M30 + Telegram
 # Многотаймфреймовый анализ, мощный фильтр, умная экспирация.
-# Бот — инструмент ДЛЯ ОБУЧЕНИЯ, не финсовет.
+# БОТ ДЛЯ ОБУЧЕНИЯ. НЕ ФИНСОВЕТ.
 
 import time
 import os
@@ -12,6 +12,13 @@ import pandas as pd
 import yfinance as yf
 import requests
 import streamlit as st
+
+# ==================== STREAMLIT CONFIG ====================
+
+st.set_page_config(
+    page_title="AI FX Bot v4.2 — M1+M5+M15+M30 + Telegram",
+    layout="wide",
+)
 
 # ==================== SECRETS ====================
 
@@ -26,10 +33,10 @@ CHAT_ID = st.secrets.get(
 
 # ==================== SETTINGS ====================
 
-REFRESH_SEC = 1              # автообновление, сек (используем на стороне браузера)
-ONLY_NEW = True              # не спамим одно и то же
+REFRESH_SEC = 1              # (используется на стороне Streamlit, при желании можно добавить st.experimental_rerun)
+ONLY_NEW = True              # защита от спама одинаковых сигналов
 MIN_SEND_GAP_S = 60          # пауза между сигналами по одной паре
-BASE_CONF_THRESHOLD = 70     # базовый порог уверенности
+BASE_CONF_THRESHOLD = 70     # базовый порог уверенности (дальше усиливается режимом)
 
 # Режимы фильтра
 MODES = {
@@ -65,7 +72,7 @@ PAIRS = {
     "GBPAUD": "GBPAUD=X",
     "GBPNZD": "GBPNZD=X",
 
-    # Crypto / индексы (PO любит)
+    # Crypto / индексы
     "BTCUSD (Bitcoin)": "BTC-USD",
     "ETHUSD (Ethereum)": "ETH-USD",
     "XAUUSD (Gold)": "XAUUSD=X",
@@ -119,23 +126,17 @@ def get_or_fake(symbol: str, tf: tuple) -> pd.DataFrame:
         )
     return df
 
-
 # ==================== ИНДИКАТОРЫ ====================
 
 def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    """
-    Безопасный RSI.
-    Не ломается, если данных мало или попадаются NaN.
-    """
+    """Безопасный RSI, не ломается на малом числе свечей."""
     if series is None or len(series) == 0:
         return pd.Series(dtype=float)
 
     if len(series) < period + 1:
-        # мало свечей → ровный RSI 50
         return pd.Series([50.0] * len(series), index=series.index)
 
     delta = series.diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -144,7 +145,6 @@ def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-
     rsi = rsi.fillna(50)
 
     return rsi
@@ -153,11 +153,8 @@ def calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 def calc_macd(series: pd.Series):
     """Безопасный MACD, всегда возвращает 3 серии."""
     if series is None or len(series) == 0:
-        return (
-            pd.Series(dtype=float),
-            pd.Series(dtype=float),
-            pd.Series(dtype=float),
-        )
+        empty = pd.Series(dtype=float)
+        return empty, empty, empty
 
     if len(series) < 35:
         s = pd.Series([0.0] * len(series), index=series.index)
@@ -172,10 +169,11 @@ def calc_macd(series: pd.Series):
 
 
 def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Железобетонный ADX — никогда не вызывает ошибки 1-dimension."""
+    """Железобетонный ADX — без ошибки 'Data must be 1-dimensional'."""
     try:
         if df is None or len(df) < period + 2:
-            return pd.Series([20.0], index=[df.index[-1] if df is not None and len(df)>0 else datetime.now()])
+            idx = df.index[-1] if df is not None and len(df) > 0 else datetime.now()
+            return pd.Series([20.0], index=[idx])
 
         high = df["high"].astype(float)
         low = df["low"].astype(float)
@@ -201,20 +199,17 @@ def calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
         minus_di = 100 * (minus_dm.rolling(period).sum() / atr)
 
         dx = ((plus_di - minus_di).abs() /
-             (plus_di + minus_di).replace(0, np.nan)) * 100
+              (plus_di + minus_di).replace(0, np.nan)) * 100
 
         adx = dx.rolling(period).mean().fillna(20.0)
-
-        # всегда возвращаем однострочный Series → невозможно словить ошибку
         return pd.Series([float(adx.iloc[-1])], index=[df.index[-1]])
-    except:
+    except Exception:
         return pd.Series([20.0], index=[datetime.now()])
-
 
 # ==================== ЛОГИКА СИГНАЛОВ ====================
 
 def analyze_tf(df: pd.DataFrame) -> dict:
-    """Сигнал по одному tf."""
+    """Сигнал по одному ТФ."""
     close = df["close"]
 
     rsi = calc_rsi(close)
@@ -238,10 +233,7 @@ def analyze_tf(df: pd.DataFrame) -> dict:
         signal = "FLAT"
 
     # Режим рынка по ADX
-    if adx_v >= 25:
-        regime = "trend"
-    else:
-        regime = "flat"
+    regime = "trend" if adx_v >= 25 else "flat"
 
     return {
         "time": last,
@@ -268,7 +260,6 @@ def combine_multi_tf(m1_info: dict,
     - получаем реалистичные 60–95% уверенности
     """
 
-    # ---------- 1. Сбор направлений ----------
     infos = [m1_info, m5_info, m15_info, m30_info]
     signals = [i["signal"] for i in infos]
 
@@ -285,10 +276,10 @@ def combine_multi_tf(m1_info: dict,
     else:
         final_signal = "FLAT"
 
-    # ---------- 2. Базовая уверенность по голосам ----------
+    # ---------- 2. Базовая уверенность ----------
     conf = 40  # старт
-
     max_votes = max(buy_votes, sell_votes)
+
     if max_votes == 4:
         conf += 35
     elif max_votes == 3:
@@ -297,10 +288,8 @@ def combine_multi_tf(m1_info: dict,
         conf += 15
     elif max_votes == 1:
         conf += 5
-    else:
-        conf += 0
 
-    # ---------- 3. Вес старших TF (M15 + M30) ----------
+    # ---------- 3. Вес старших TF ----------
     high_tf_signals = [m15_info["signal"], m30_info["signal"]]
     if final_signal in ("BUY", "SELL"):
         high_tf_agree = high_tf_signals.count(final_signal)
@@ -309,9 +298,9 @@ def combine_multi_tf(m1_info: dict,
         elif high_tf_agree == 1:
             conf += 5
         else:
-            conf -= 10  # старшие против — ослабляем
+            conf -= 10
 
-    # ---------- 4. ADX: сила тренда ----------
+    # ---------- 4. ADX ----------
     avg_adx = (m5_info["ADX"] + m15_info["ADX"] + m30_info["ADX"]) / 3.0
     if avg_adx >= 35:
         conf += 10
@@ -320,9 +309,8 @@ def combine_multi_tf(m1_info: dict,
     elif avg_adx <= 15:
         conf -= 10
 
-    # ---------- 5. RSI: зона перекупленности/перепроданности ----------
+    # ---------- 5. RSI ----------
     avg_rsi = (m5_info["RSI"] + m15_info["RSI"] + m30_info["RSI"]) / 3.0
-
     if final_signal == "BUY":
         if avg_rsi >= 60:
             conf += 10
@@ -334,7 +322,6 @@ def combine_multi_tf(m1_info: dict,
         elif avg_rsi >= 55:
             conf -= 10
 
-    # Ограничиваем 0–100
     conf = int(max(0, min(100, conf)))
 
     # ---------- 6. Класс сигнала ----------
@@ -345,7 +332,7 @@ def combine_multi_tf(m1_info: dict,
     else:
         trade_class = "C"
 
-    # ---------- 7. Режим и фаза рынка ----------
+    # ---------- 7. Режим и фаза ----------
     regime_votes = [i["Regime"] for i in infos]
     trend_votes = regime_votes.count("trend")
 
@@ -356,36 +343,34 @@ def combine_multi_tf(m1_info: dict,
     else:
         regime = "flat"
 
-    # Фазу возьмём по RSI M30
     rsi30 = m30_info["RSI"]
     if rsi30 < 40 or rsi30 > 60:
-        phase = "start"   # начало импульса
+        phase = "start"
     elif 40 <= rsi30 <= 45 or 55 <= rsi30 <= 60:
-        phase = "mid"     # середина движения
+        phase = "mid"
     else:
-        phase = "end"     # выдох движения / возможный разворот
+        phase = "end"
 
-    # ---------- 8. Детальная инфа для интерфейса/телеги ----------
     info = {
         "M1": m1_info["signal"],
         "M5": m5_info["signal"],
         "M15": m15_info["signal"],
         "M30": m30_info["signal"],
 
-        # условные "локальные" уверенности для отображения
-        "Conf_M1":  60 if m1_info["signal"] == final_signal else 40,
-        "Conf_M5":  70 if m5_info["signal"] == final_signal else 40,
+        "Conf_M1": 60 if m1_info["signal"] == final_signal else 40,
+        "Conf_M5": 70 if m5_info["signal"] == final_signal else 40,
         "Conf_M15": 80 if m15_info["signal"] == final_signal else 40,
         "Conf_M30": 85 if m30_info["signal"] == final_signal else 40,
 
         "Regime": regime,
         "Phase": phase,
-        "BW": abs(m30_info["RSI"] - 50),   # условная ширина тренда
+        "BW": abs(m30_info["RSI"] - 50),
         "ADX30": float(m30_info["ADX"]),
     }
 
     return final_signal, conf, trade_class, info
 
+# ==================== ЭКСПИРАЦИЯ ====================
 
 def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
     """
@@ -394,8 +379,6 @@ def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
     - нормальные → 2–3 мин
     - сильные → 3–6 мин
     """
-
-    # 1) базовое время по уверенности
     if conf >= 95:
         base = 5
     elif conf >= 90:
@@ -405,154 +388,22 @@ def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
     elif conf >= 80:
         base = 2
     else:
-        base = 0  # слабый сигнал — лучше не брать
+        return 0  # слабый сигнал
 
-    # 2) режим рынка
-    if regime == "trend":
-        base += 1          # тренд — можно держать чуть дольше
-    elif regime == "flat":
-        base -= 1          # флэт — лучше короче
-
-    # 3) фаза движения
-    if phase == "start":
-        base += 1          # начало движения — есть потенциал
-    elif phase == "end":
-        base -= 1          # возможный разворот — сокращаем
-
-    if base <= 0:
-        return 0
-
-    # ограничение в пределах 1–15 минут (для PO нормально)
-    return int(max(1, min(15, base)))
-
-    # --------- Ultra-PRO фильтр качества ---------
-    strong = False
-    if base_signal == "BUY":
-        strong = (
-            buy_votes >= 3
-            and trend_votes >= 2          # тренд по старшим
-            and avg_rsi >= 58             # не середина, а нормальный перекос
-            and adx30 >= 22               # рынок не мёртвый
-        )
-    elif base_signal == "SELL":
-        strong = (
-            sell_votes >= 3
-            and trend_votes >= 2
-            and avg_rsi <= 42
-            and adx30 >= 22
-        )
-
-    if not strong:
-        # если условия не выполнены — сигнал считаем FLAT,
-        # чтобы бот молчал в мусоре
-        final_signal = "FLAT"
-
-    # --------- Подсчёт уверенности (0–99) ---------
-    score = 0.0
-
-    # 1) Согласие TF
-    score += max(buy_votes, sell_votes) * 8.0          # до ~32
-
-    # 2) Тренд по старшим TF
-    score += min(trend_votes, 3) * 8.0                 # до ~24
-
-    # 3) ADX силы тренда
-    adx_score = max(0.0, min(adx30, 50.0)) / 50.0 * 25.0
-    score += adx_score                                  # до ~25
-
-    # 4) Насколько RSI далеко от 50 (чем дальше — тем лучше)
-    rsi_edge = abs(avg_rsi - 50.0)
-    rsi_score = max(0.0, min(rsi_edge, 20.0)) / 20.0 * 18.0
-    score += rsi_score                                  # до ~18
-
-    conf = int(round(max(0.0, min(score, 99.0))))
-
-    # Для FLAT не даём конфу выглядеть как "суперсигнал"
-    if final_signal == "FLAT":
-        conf = min(conf, 75)
-
-    # --------- Класс сигнала ---------
-    if conf >= 92:
-        trade_class = "A+"
-    elif conf >= 85:
-        trade_class = "A"
-    elif conf >= 80:
-        trade_class = "B"
-    else:
-        trade_class = "C"
-
-    # --------- Режим и фаза для инфо ---------
-    regime = "trend" if trend_votes >= 2 else "flat"
-
-    if avg_rsi <= 35 or avg_rsi >= 65:
-        phase = "end"      # возможное окончание импульса
-    elif avg_rsi < 45 or avg_rsi > 55:
-        phase = "start"    # активная зона движения
-    else:
-        phase = "mid"      # середина, шум
-
-    # --------- Информация для таблицы/телеги ---------
-    info = {
-        "M1": m1_info["signal"],
-        "M5": m5_info["signal"],
-        "M15": m15_info["signal"],
-        "M30": m30_info["signal"],
-
-        # можно потом показывать по ТФ, если захочешь
-        "Conf_M1": conf if m1_info["signal"] == final_signal else 0,
-        "Conf_M5": conf if m5_info["signal"] == final_signal else 0,
-        "Conf_M15": conf if m15_info["signal"] == final_signal else 0,
-        "Conf_M30": conf if m30_info["signal"] == final_signal else 0,
-
-        "Regime": regime,
-        "Phase": phase,
-        "BW": round(abs(avg_rsi - 50.0), 2),  # ширина отклонения от середины
-        "ADX30": round(adx30, 2),
-    }
-
-    return final_signal, conf, trade_class, info
-
-
-# ==================== ЭКСПИРАЦИЯ ====================
-
-def choose_expiry(conf: int, regime: str = None, phase: str = None) -> int:
-    """
-    Ultra-PRO экспирация:
-    - Очень сильные сигналы → 2–3 минуты
-    - Средние → 4–6 минут
-    - Всё, что слабее 80% → не торговать (0)
-    """
-    # слишком слабые — пропуск
-    if conf < 80:
-        return 0
-
-    # базовое время по уверенности
-    if conf >= 95:
-        base = 2
-    elif conf >= 90:
-        base = 3
-    elif conf >= 85:
-        base = 4
-    else:  # 80–84
-        base = 5
-
-    # тренд → можно держать дольше
     if regime == "trend":
         base += 1
     elif regime == "flat":
         base -= 1
 
-    # фаза движения
     if phase == "start":
-        base += 1        # старт импульса → даём ещё минуту
+        base += 1
     elif phase == "end":
-        base -= 1        # конец — аккуратно
+        base -= 1
 
     if base <= 0:
         return 0
 
-    return int(max(1, min(15, base)))  # ограничим 1–15 минут
-
+    return int(max(1, min(15, base)))
 
 # ==================== TELEGRAM ====================
 
@@ -565,22 +416,18 @@ def send_telegram(
     mtype: str,
     info: dict,
 ) -> None:
+    """Отправка сигнала в Telegram с удобным кодом для Pocket."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
-    # -------------------------
-    # 1) Копируемый код валюты
-    # -------------------------
-    # BTCUSD → BTCUSD
-    # EURUSD → EUR/USD
+    # ----- Код для Pocket -----
+    # EURUSD -> EUR/USD, BTCUSD -> BTCUSD
     if len(pair_code) == 6:
         pocket_code = pair_code[:3] + "/" + pair_code[3:]
     else:
-        pocket_code = pair_code  # BTCUSD оставляем как есть
+        pocket_code = pair_code
 
-    # -------------------------
-    # 2) Стрелка направления
-    # -------------------------
+    # ----- Направление -----
     if signal == "BUY":
         arrow = "🟢 BUY"
     elif signal == "SELL":
@@ -588,33 +435,29 @@ def send_telegram(
     else:
         arrow = "⚪ FLAT"
 
-    # -------------------------
-    # 3) Усиленная логика — отправляем только сильные точки входа
-    # -------------------------
     m1 = info.get("M1", "?")
     m5 = info.get("M5", "?")
     m15 = info.get("M15", "?")
     m30 = info.get("M30", "?")
     adx = info.get("ADX30", 0)
 
-    strong_trend = (m5 == signal and m15 == signal) or (m15 == signal and m30 == signal)
-    multi_agree = sum([m1 == signal, m5 == signal, m15 == signal, m30 == signal])
+    # Фильтр "супер-сигналов"
+    multi_agree = sum([
+        m1 == signal,
+        m5 == signal,
+        m15 == signal,
+        m30 == signal,
+    ])
 
-    # Требования для "супер-сигналов"
     if conf < 80:
-        return  # слабый
-
+        return
     if adx < 10:
-        return  # тренда нет
-
+        return
     if multi_agree < 2:
-        return  # слабая MTF структура
+        return
 
-    # -------------------------
-    # 4) Готовый текст (100% копируется)
-    # -------------------------
     text = (
-        f"🤖 AI FX Signal Bot v4.1 PRO\n"
+        f"🤖 AI FX Signal Bot v4.2 PRO\n"
         f"📌 Пара: {pair_name}\n"
         f"📋 Код для Pocket: {pocket_code}\n"
         f"🏷 Тип: {mtype}\n"
@@ -630,13 +473,9 @@ def send_telegram(
         f"⏱ Экспирация: {expiry} мин\n"
         f"📈 ADX30: {adx}\n"
         f"\n"
-        f"🌍 Режим: flat | Фаза: start\n"
         f"❗ Бот для обучения. Не финсовет."
     )
 
-    # -------------------------
-    # 5) Отправка
-    # -------------------------
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text}
 
@@ -645,15 +484,9 @@ def send_telegram(
     except Exception:
         pass
 
-
 # ==================== UI ====================
 
-st.set_page_config(
-    page_title="AI FX Bot v4.1 — M1+M5+M15+M30 + Telegram",
-    layout="wide",
-)
-
-st.title("AI FX Bot v4.1 PRO — M1+M5+M15+M30 + Telegram")
+st.title("AI FX Bot v4.2 PRO — M1+M5+M15+M30 + Telegram")
 
 st.markdown(
     "Режимы **Safe / Normal / Hard / Ultra** — это стиль фильтра, а не гарантия. "
@@ -785,4 +618,4 @@ st.dataframe(df_signals, use_container_width=True)
 st.caption(
     "При уверенности < 80% и классе C лучше пропускать сигнал. "
     "Уровень A — самые сильные точки входа по логике бота."
-)
+        )
